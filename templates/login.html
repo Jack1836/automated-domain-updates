@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Content Aggregator</title>
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Söhne:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* 
+           ChatGPT-style Login Page Aesthetic
+           Minimalist, centered, sleek buttons.
+        */
+        :root {
+            --primary-green: #10a37f;
+            --primary-hover: #1a7f64;
+            --bg-color: #ffffff;
+            --text-main: #2d333a;
+            --text-muted: #6e6e80;
+            --border-color: #c5c5d2;
+            --error-color: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: inherit;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 1rem;
+            font-family: 'Inter', -apple-system, sans-serif;
+            color: var(--text-main);
+        }
+
+        .login-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .logo-icon {
+            margin-bottom: 2rem;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .login-container {
+            width: 100%;
+        }
+
+        /* Form Group styling for inputs */
+        .form-group {
+            margin-bottom: 1rem;
+            text-align: left;
+            position: relative;
+        }
+
+        input[type="email"],
+        input[type="password"] {
+            width: 100%;
+            padding: 1rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        }
+
+        input[type="email"]:focus,
+        input[type="password"]:focus {
+            border-color: var(--primary-green);
+            box-shadow: 0 0 0 1px var(--primary-green);
+        }
+
+        /* Error message styling */
+        .error-message {
+            color: var(--error-color);
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+            display: none;
+            /* Hidden by default */
+        }
+
+        /* Login Button */
+        .continue-btn {
+            width: 100%;
+            padding: 1rem;
+            background-color: var(--primary-green);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-top: 0.5rem;
+        }
+
+        .continue-btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .continue-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .signup-text {
+            color: var(--text-main);
+            font-size: 0.9rem;
+            text-align: center;
+            margin-top: 1.5rem;
+        }
+
+        .signup-text a {
+            color: var(--primary-green);
+            text-decoration: none;
+            margin-left: 0.2rem;
+        }
+
+        .signup-text a:hover {
+            text-decoration: underline;
+        }
+
+        /* Divider */
+        .divider {
+            display: flex;
+            align-items: center;
+            text-align: center;
+            margin: 1.5rem 0;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            flex: 1;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .divider:not(:empty)::before {
+            margin-right: 1rem;
+        }
+
+        .divider:not(:empty)::after {
+            margin-left: 1rem;
+        }
+
+        /* Social Buttons */
+        .social-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            background-color: white;
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            text-decoration: none;
+            position: relative;
+        }
+
+        .social-btn:hover {
+            background-color: #f7f7f8;
+        }
+
+        .social-btn img,
+        .social-btn svg,
+        .social-btn i {
+            position: absolute;
+            left: 1rem;
+            width: 20px;
+            height: 20px;
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="login-wrapper">
+        <div class="logo-icon">
+            <!-- Simulated ChatGPT-like SVG Logo -->
+            <svg width="41" height="41" viewBox="0 0 41 41" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                    d="M37.5324 16.8707C37.9808 15.5241 38.1363 14.0974 37.9886 12.6859C37.8409 11.2744 37.3934 9.91076 36.676 8.68622C35.6126 6.83404 33.9882 5.3676 32.0373 4.4985C30.0864 3.62941 27.9104 3.40201 25.8215 3.85078C24.8796 2.78831 23.6749 1.95725 22.3155 1.43632C20.9561 0.915403 19.4862 0.72223 18.0416 0.87532C16.0592 1.08272 14.1956 1.95475 12.7214 3.36447C11.2471 4.77418 10.2407 6.64687 9.8453 8.65597C8.4219 9.17173 7.1593 10.0177 6.1678 11.1215C5.1763 12.2253 4.4848 13.5539 4.1485 14.9818C3.76311 16.6373 3.81667 18.3614 4.30396 19.9926C4.79124 21.6238 5.69613 23.1092 6.9388 24.3168C6.4903 25.6634 6.3348 27.0901 6.4825 28.5016C6.6302 29.9131 7.0777 31.2767 7.7951 32.5013C8.8585 34.3535 10.483 35.8199 12.4338 36.689C14.3847 37.5581 16.5608 37.7855 18.6496 37.3367C19.5916 38.3992 20.7963 39.2302 22.1557 39.7512C23.5151 40.2721 24.985 40.4653 26.4296 40.3122C28.4119 40.1048 30.2755 39.2327 31.7498 37.823C33.224 36.4133 34.2304 34.5406 34.6258 32.5315C36.0493 32.0158 37.3119 31.1698 38.3034 30.066C39.2949 28.9622 39.9864 27.6336 40.3227 26.2057C40.708 24.5502 40.6545 22.8261 40.1672 21.1949C39.68 19.5637 38.7751 18.0783 37.5324 16.8707ZM22.497 37.8849C20.9443 37.8844 19.4293 37.4241 18.1408 36.5606L18.4239 36.3986L28.3182 30.6865C28.5298 30.5645 28.7061 30.3923 28.8288 30.1878C28.9515 29.9834 29.0162 29.7544 29.016 29.5244V18.1065L32.2599 19.979C32.2743 19.9871 32.2855 19.999 32.2922 20.0129C32.2988 20.0268 32.3005 20.0422 32.2971 20.0567C32.0833 24.4939 30.223 28.6946 27.0505 31.7801C23.8779 34.8656 19.6201 36.606 15.1764 36.6579H15.1583V36.6669L22.497 37.8849ZM6.96101 29.1417C6.18526 27.7957 5.77666 26.2737 5.77884 24.7212C5.7794 23.1685 6.18919 21.6468 6.96637 20.3013L7.24823 20.4633L17.1425 26.1754C17.3541 26.2974 17.5898 26.3621 17.826 26.3623C18.0621 26.3624 18.2917 26.298 18.4897 26.1764L28.384 20.4643V16.7196L25.1401 18.5921C25.1257 18.6002 25.1091 18.6033 25.0931 18.6008C25.0772 18.5983 25.0628 18.5906 25.0526 18.5786C21.8219 15.6565 17.5753 14.072 13.1362 14.1378C8.69719 14.2037 4.51613 15.9126 1.39209 18.9406L1.37894 18.9534V29.1437H6.96101V29.1417ZM30.9388 15.0232C31.7144 16.3695 32.1228 17.8916 32.1205 19.4443C32.1198 20.9969 31.7099 22.5186 30.9325 23.864L30.6506 23.702L20.7564 17.9899C20.5448 17.8679 20.3091 17.8031 20.0729 17.8031C19.8368 17.8031 19.6011 17.8675 19.3895 17.9891L9.49528 23.7012V27.4459L12.7391 25.5734C12.7536 25.5653 12.7702 25.5622 12.7861 25.5647C12.8021 25.5672 12.8165 25.5749 12.8267 25.5869C16.0574 28.509 20.304 30.0935 24.7431 30.0277C29.1821 29.9618 33.3631 28.2529 36.4872 25.2249L36.5003 25.2121V15.0212H30.9388V15.0232ZM19.2604 11.2386C20.8131 11.2391 22.3281 11.6994 23.6166 12.5629L23.3335 12.7249L13.4392 18.437C13.2276 18.559 13.0513 18.7312 12.9286 18.9357C12.8059 19.1401 12.7412 19.3691 12.7414 19.5991V31.017L9.49751 29.1445C9.48301 29.1364 9.4718 29.1245 9.46517 29.1106C9.45854 29.0967 9.45688 29.0813 9.46029 29.0668C9.67411 24.6296 11.5344 20.4289 14.7069 17.3434C17.8795 14.2579 22.1373 12.5175 26.581 12.4656H26.5991V12.4566L19.2604 11.2386ZM33.9181 13.9067C34.6938 15.253 35.102 16.7752 35.0995 18.3278C35.0987 19.8804 34.6885 21.4021 33.9111 22.7475L33.6293 22.5855L23.735 16.8734C23.5234 16.7514 23.2877 16.6865 23.0516 16.6865C22.8155 16.6865 22.5798 16.7509 22.3682 16.8725L12.4739 22.5846V18.8398L15.7178 16.9673C15.7323 16.9592 15.7489 16.9561 15.7648 16.9585C15.7808 16.961 15.7952 16.9687 15.8053 16.9807C19.0361 19.9028 23.2826 21.4873 27.7217 21.4215C32.1608 21.3556 36.3418 19.6467 39.4658 16.6187L39.479 16.6059V6.41505H33.897V13.9067H33.9181ZM22.597 19.4624L18.4239 17.053L14.2508 19.4624V24.281L18.4239 26.6905L22.597 24.281V19.4624ZM22.6953 4.2572C21.1425 4.25771 19.6276 4.71796 18.339 5.5815L18.6221 5.74352L28.5164 11.4556C28.728 11.5775 28.9043 11.7498 29.027 11.9542C29.1497 12.1586 29.2144 12.3876 29.2142 12.6176V24.0355L32.4581 22.163C32.4726 22.1549 32.4838 22.143 32.4904 22.1291C32.497 22.1152 32.4987 22.0998 32.4953 22.0853C32.2815 17.6481 30.4212 13.4475 27.2486 10.362C24.0761 7.27649 19.8183 5.53603 15.3746 5.48417H15.3565V5.49317L22.6953 4.2572Z"
+                    fill="var(--text-main)" />
+            </svg>
+        </div>
+
+        <h1 class="title">Welcome back</h1>
+
+        <div class="login-container">
+            <!-- Login Form -->
+            <form id="loginForm" novalidate>
+                <!-- Email Field -->
+                <div class="form-group">
+                    <input type="email" id="email" placeholder="Email address" required>
+                    <div class="error-message" id="emailError">Please enter a valid email address.</div>
+                </div>
+
+                <!-- Password Field -->
+                <div class="form-group" id="passwordGroup" style="display: none;">
+                    <input type="password" id="password" placeholder="Password">
+                    <div class="error-message" id="passwordError">Please enter your password.</div>
+                </div>
+
+                <!-- Global Error for failed validation -->
+                <div class="error-message" id="globalError" style="text-align: center; margin-bottom: 1rem;">
+                    Wrong email or password
+                </div>
+
+                <button type="submit" class="continue-btn" id="continueBtn">Continue</button>
+            </form>
+
+            <div class="signup-text">
+                Don't have an account? <a href="#">Sign up</a>
+            </div>
+
+            <div class="divider">OR</div>
+
+            <!-- Social Logins -->
+            <a href="/mock-google-login" class="social-btn">
+                <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+                    <path fill="#EA4335"
+                        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z">
+                    </path>
+                    <path fill="#4285F4"
+                        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z">
+                    </path>
+                    <path fill="#FBBC05"
+                        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z">
+                    </path>
+                    <path fill="#34A853"
+                        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z">
+                    </path>
+                    <path fill="none" d="M0 0h48v48H0z"></path>
+                </svg>
+                Continue with Google
+            </a>
+
+            <a href="#" class="social-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+                    <path fill="#f25022" d="M1 1h9v9H1z" />
+                    <path fill="#00a4ef" d="M1 11h9v9H1z" />
+                    <path fill="#7fba00" d="M11 1h9v9h-9z" />
+                    <path fill="#ffb900" d="M11 11h9v9h-9z" />
+                </svg>
+                Continue with Microsoft Account
+            </a>
+
+            <a href="#" class="social-btn">
+                <i class="fab fa-apple"></i>
+                Continue with Apple
+            </a>
+        </div>
+    </div>
+
+    <!-- JavaScript Validation -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const loginForm = document.getElementById('loginForm');
+            const emailInput = document.getElementById('email');
+            const passwordGroup = document.getElementById('passwordGroup');
+            const passwordInput = document.getElementById('password');
+            const emailError = document.getElementById('emailError');
+            const passwordError = document.getElementById('passwordError');
+            const globalError = document.getElementById('globalError');
+            const continueBtn = document.getElementById('continueBtn');
+
+            // Basic email regex pattern
+            const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            let currentStep = 'email'; // Can be 'email' or 'password'
+
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+
+                // Reset error states
+                let isValid = true;
+                emailError.style.display = 'none';
+                passwordError.style.display = 'none';
+                globalError.style.display = 'none';
+                emailInput.style.borderColor = 'var(--border-color)';
+                passwordInput.style.borderColor = 'var(--border-color)';
+
+                const emailValue = emailInput.value.trim();
+
+                if (currentStep === 'email') {
+                    // 1. Validate Email
+                    if (!emailValue) {
+                        emailError.textContent = 'Email is required.';
+                        emailError.style.display = 'block';
+                        emailInput.style.borderColor = 'var(--error-color)';
+                        isValid = false;
+                    } else if (!emailPattern.test(emailValue)) {
+                        emailError.textContent = 'Please enter a valid email address.';
+                        emailError.style.display = 'block';
+                        emailInput.style.borderColor = 'var(--error-color)';
+                        isValid = false;
+                    }
+
+                    if (isValid) {
+                        emailInput.readOnly = true;
+                        emailInput.style.backgroundColor = '#f3f4f6';
+                        passwordGroup.style.display = 'block';
+                        passwordInput.required = true;
+                        passwordInput.focus();
+                        currentStep = 'password';
+                    }
+                } else if (currentStep === 'password') {
+                    const passwordValue = passwordInput.value.trim();
+
+                    if (!passwordValue) {
+                        passwordError.style.display = 'block';
+                        passwordInput.style.borderColor = 'var(--error-color)';
+                        isValid = false;
+                    }
+
+                    if (isValid) {
+                        // Simulate login
+                        continueBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                        continueBtn.disabled = true;
+
+                        setTimeout(() => {
+                            // Redirect to the mock google login to grant a session
+                            window.location.href = '/mock-google-login';
+                        }, 800);
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

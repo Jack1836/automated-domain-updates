@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Content Aggregator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
@@ -37,6 +37,10 @@
             <h1 id="app-name">Smart Content Aggregator</h1>
         </div>
         <div class="header-right">
+            <a href="/logout" class="primary-btn"
+                style="text-decoration: none; padding: 0.5rem 1rem; font-size: 0.9rem; display: flex; align-items: center; gap: 0.4rem; background-color: var(--error-color, #ef4444);">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
             <!-- Saved Articles button was removed here as it is available in the sidebar -->
         </div>
     </header>
@@ -76,20 +80,16 @@
                     <li id="sidebar-saved-btn">
                         <i class="fas fa-bookmark"></i>
                         <span>Saved Articles</span>
+                        <span id="saved-count-badge" class="badge">0</span>
+                    </li>
+                    <li id="sidebar-settings-btn"
+                        style="margin-top: 0.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                        <i class="fas fa-cog"></i>
+                        <span>Settings (API Keys)</span>
                     </li>
                 </ul>
             </div>
-            <div class="sidebar-section ai-mode-section">
-                <div class="ai-mode-header">
-                    <i class="fas fa-magic"></i>
-                    <span>AI Summary Mode</span>
-                    <label class="switch">
-                        <input type="checkbox" id="ai-summary-toggle">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-                <p class="ai-mode-desc">Condense descriptions into short AI summaries automatically.</p>
-            </div>
+
         </aside>
 
         <main class="content">
@@ -103,12 +103,28 @@
                             class="fas fa-sync-alt"></i></button>
                     <div id="search-suggestions" class="suggestions-dropdown" style="display: none;"></div>
                 </div>
-                <div class="sentiment-filters" id="sentiment-filters">
-                    <span class="filter-label">Filter by Sentiment:</span>
-                    <button class="sentiment-filter active" data-sentiment="all">All</button>
-                    <button class="sentiment-filter positive" data-sentiment="Positive">🟢 Positive</button>
-                    <button class="sentiment-filter neutral" data-sentiment="Neutral">⚪ Neutral</button>
-                    <button class="sentiment-filter negative" data-sentiment="Negative">🔴 Negative</button>
+                <div class="search-controls"
+                    style="display: flex; align-items: center; justify-content: space-between; margin-top: 1rem; flex-wrap: wrap; gap: 1rem;">
+                    <div class="sentiment-filters" id="sentiment-filters" style="margin-top: 0;">
+                        <span class="filter-label">Filter:</span>
+                        <button class="sentiment-filter active" data-sentiment="all">All</button>
+                        <button class="sentiment-filter positive" data-sentiment="Positive">🟢 Positive</button>
+                        <button class="sentiment-filter neutral" data-sentiment="Neutral">⚪ Neutral</button>
+                        <button class="sentiment-filter negative" data-sentiment="Negative">🔴 Negative</button>
+                    </div>
+
+                    <div class="ai-mode-section-inline"
+                        style="display: flex; align-items: center; gap: 0.8rem; padding-left: 1rem; border-left: 2px solid var(--border-color);">
+                        <div
+                            style="display: flex; align-items: center; gap: 0.4rem; font-weight: 600; color: var(--text-main); font-size: 0.9rem;">
+                            <i class="fas fa-magic" style="color: var(--primary-blue);"></i>
+                            <span>AI Summary</span>
+                        </div>
+                        <label class="switch" style="margin: 0; transform: scale(0.9);">
+                            <input type="checkbox" id="ai-summary-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
                 </div>
             </div>
 
@@ -171,19 +187,109 @@
                         <!-- Content will be injected here -->
                     </div>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <a id="modal-read-link" href="#" target="_blank" class="primary-btn"><i
-                        class="fas fa-external-link-alt"></i> Read Full</a>
-                <button id="modal-deep-sum-btn" class="primary-btn deep-sum-btn"
-                    style="background: linear-gradient(135deg, #6e8efb, #a777e3); border: none; margin-left: auto;">
-                    <i class="fas fa-bolt"></i> Summarize Detailed
-                </button>
+
+                <!-- NEW: Similar Articles Section -->
+                <div id="modal-similar-section" class="modal-nlp-section similar-section"
+                    style="display: none; margin-top: 1rem;">
+                    <h4><i class="fas fa-project-diagram"></i> Semantically Similar Articles</h4>
+                    <div id="modal-similar-content" class="similar-content"
+                        style="color: var(--text-main); font-size: 0.9rem; line-height: 1.6; margin-top: 0.5rem;">
+                        <!-- Content will be injected here -->
+                    </div>
+                </div>
+
+                <!-- NEW: TTS Script Section -->
+                <div id="modal-tts-section" class="modal-nlp-section tts-section"
+                    style="display: none; margin-top: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4><i class="fas fa-film" style="color: #8b5cf6;"></i> Video Scenes</h4>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button id="modal-tts-play-btn" class="secondary-btn"
+                                style="padding: 0.3rem 0.6rem; font-size: 0.8rem;"><i class="fas fa-play"></i> Play
+                                Voice</button>
+                            <button id="modal-video-btn" class="secondary-btn"
+                                style="padding: 0.3rem 0.6rem; font-size: 0.8rem; background: #ec4899; color: white; border: none;"><i
+                                    class="fas fa-video"></i> Convert to Video</button>
+                            <button id="modal-tts-copy-btn" class="secondary-btn"
+                                style="padding: 0.3rem 0.6rem; font-size: 0.8rem;"><i class="fas fa-copy"></i>
+                                Copy</button>
+                        </div>
+                    </div>
+                    <audio id="modal-tts-audio" controls
+                        style="display: none; width: 100%; margin-top: 0.8rem;"></audio>
+                    <div id="modal-tts-content" class="tts-content"
+                        style="color: var(--text-main); font-size: 0.95rem; line-height: 1.6; margin-top: 0.5rem; background: #fdf4ff; padding: 1rem; border-radius: 8px; white-space: pre-wrap; border: 1px solid #f5d0fe;">
+                        <!-- Content will be injected here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <a id="modal-read-link" href="#" target="_blank" class="primary-btn"><i
+                            class="fas fa-external-link-alt"></i> Read Full</a>
+                    <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+                        <button id="modal-find-similar-btn" class="primary-btn similar-btn"
+                            style="background: linear-gradient(135deg, #FF6B6B, #FF8E53); border: none;">
+                            <i class="fas fa-brain"></i> Find Similar AI
+                        </button>
+
+                        <button id="modal-tts-btn" class="primary-btn tts-btn"
+                            style="background: linear-gradient(135deg, #8b5cf6, #d946ef); border: none;">
+                            <i class="fas fa-volume-up"></i> Play Voice Script
+                        </button>
+                        <button id="modal-deep-sum-btn" class="primary-btn deep-sum-btn"
+                            style="background: linear-gradient(135deg, #6e8efb, #a777e3); border: none;">
+                            <i class="fas fa-bolt"></i> Summarize Detailed
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
 
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+        <!-- NEW: Settings Modal -->
+        <div id="settings-modal-overlay" class="modal-overlay" style="z-index: 4000;">
+            <div class="article-modal" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2 style="font-size: 1.2rem; color: var(--text-main); margin: 0;"><i class="fas fa-cog"></i>
+                        Configure API Keys</h2>
+                    <button id="close-settings-modal"
+                        style="background: none; border: none; font-size: 1.5rem; color: var(--text-muted); cursor: pointer;"><i
+                            class="fas fa-times"></i></button>
+                </div>
+                <div class="modal-content" style="padding: 1.5rem;">
+                    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem;">Enter your API keys
+                        below to enable AI video generation and intelligent features. Keys are saved securely to your
+                        local `.env` file.</p>
+
+                    <div style="margin-bottom: 1rem;">
+                        <label for="settings-openai-key"
+                            style="display: block; font-weight: 600; color: var(--text-main); font-size: 0.9rem; margin-bottom: 0.5rem;">OpenAI
+                            API Key <span style="font-weight: normal; color: #888; font-size: 0.8rem;">(Required for
+                                Video/Voice)</span></label>
+                        <input type="password" id="settings-openai-key" placeholder="sk-..."
+                            style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; background: var(--bg-alt); color: var(--text-main);">
+                    </div>
+
+                    <div style="margin-bottom: 1.5rem;">
+                        <label for="settings-gemini-key"
+                            style="display: block; font-weight: 600; color: var(--text-main); font-size: 0.9rem; margin-bottom: 0.5rem;">Google
+                            Gemini API Key <span style="font-weight: normal; color: #888; font-size: 0.8rem;">(Required
+                                for Summaries)</span></label>
+                        <input type="password" id="settings-gemini-key" placeholder="AIzaSy..."
+                            style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; background: var(--bg-alt); color: var(--text-main);">
+                    </div>
+
+                    <div id="settings-message"
+                        style="display: none; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; text-align: center;">
+                    </div>
+
+                    <button id="settings-save-btn" class="primary-btn"
+                        style="width: 100%; justify-content: center; padding: 0.75rem;"><i class="fas fa-save"></i> Save
+                        Configuration</button>
+                </div>
+            </div>
+        </div>
+
+        <script src="{{ url_for('static', filename='script.js') }}?v=14" defer></script>
+
 </body>
 
 </html>

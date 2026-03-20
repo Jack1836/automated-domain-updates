@@ -1,0 +1,18 @@
+from typing import List 
+def backtrack(path,nums):
+    res = []
+    visited = [False]*len(nums)
+    if len(path) == len(nums):
+        res.append(path[:])
+        return 
+    for i in range(len(nums)):
+        if visited[i]:
+            continue 
+        visited[i] = True 
+        backtrack(path+[nums[i]],nums)
+        visited[i] = False 
+    return path 
+
+nums = [1,2,3]
+res = backtrack([],nums)
+print(res)

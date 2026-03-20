@@ -1,7 +1,7 @@
 import sqlite3
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 from flask_cors import CORS
 import os
 import re
@@ -16,15 +16,44 @@ import concurrent.futures
 from signal_score import calculate_signal_score
 from newspaper import Article
 from googlenewsdecoder import new_decoderv1
+from io import BytesIO
+from flask import send_file
 
-
+from openai import OpenAI
 import google.generativeai as genai
+from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+load_dotenv()
+
 app = Flask(__name__)
+app.secret_key = 'hackathon-super-secret-key' # Required for session storage
 CORS(app)
 DATABASE = 'database.db'
+
+# Register the new Auth Microservice Blueprint
+from services.auth_service import auth_bp, login_required
+app.register_blueprint(auth_bp)
+
+@app.after_request
+def add_header(response):
+    """
+    Prevent the browser from caching authenticated pages. 
+    This fixes the issue where clicking 'Back' after logout still shows the dashboard.
+    """
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+# Pre-compiled NLP structures for performance
+STOP_WORDS = {'the', 'a', 'an', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
+              'to', 'of', 'and', 'or', 'for', 'with', 'that', 'this', 'it', 'by',
+              'as', 'from', 'has', 'have', 'will', 'been', 'not', 'but', 'its', 'their', 'they',
+              'more', 'about', 'how', 'who', 'what', 'where', 'when', 'why'}
+WORD_PATTERN_4 = re.compile(r'\b[a-zA-Z]{4,}\b')
+WORD_PATTERN_5 = re.compile(r'\b[a-zA-Z]{5,}\b')
 
 # Configure Gemini API if available
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -32,6 +61,11 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 else:
     print("WARNING: GEMINI_API_KEY not found in environment. Semantic similarity will fail.")
+
+# Configure OpenAI API
+# Removed global instantiation so we can check on-the-fly inside the route
+if not os.environ.get("OPENAI_API_KEY"):
+    print("WARNING: OPENAI_API_KEY not found in environment. TTS audio generation will fall back to browser native.")
 
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -43,9 +77,16 @@ def handle_exception(e):
     return jsonify({"status": "error", "message": "An unexpected internal server error occurred."}), 500
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE, timeout=20)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if 'db' not in g:
+        g.db = sqlite3.connect(DATABASE, timeout=20)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+@app.teardown_appcontext
+def close_connection(exception):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
 
 def get_simple_sentiment(text):
     if not text: return "Neutral"
@@ -104,18 +145,16 @@ def init_db():
     # Pre-populate a default user if none exists
     conn.execute('INSERT OR IGNORE INTO users (id, username) VALUES (1, "Default User")')
     conn.commit()
-    conn.close()
+    # Don't close conn here since it's managed by g.db tear down, or it'll break init. 
+    # But since init_db might run outside request context, let's keep it safe.
     
     # Run migrations for existing articles
     migrate()
 
 def get_keywords(text):
     if not text: return ""
-    stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
-                  'to', 'of', 'and', 'or', 'for', 'with', 'that', 'this', 'it', 'by',
-                  'as', 'from', 'has', 'have', 'will', 'been', 'not', 'but', 'its'}
-    raw_words = re.findall(r'\b[a-zA-Z]{4,}\b', text)
-    words = [w.lower() for w in raw_words if w.lower() not in stop_words]
+    raw_words = WORD_PATTERN_4.findall(text)
+    words = [w.lower() for w in raw_words if w.lower() not in STOP_WORDS]
     freq = {}
     for w in words:
         freq[w] = freq.get(w, 0) + 1
@@ -144,7 +183,6 @@ def migrate():
         conn.execute('UPDATE articles SET sentiment = ?, keywords = ? WHERE id = ?', (sentiment, keywords, article['id']))
     
     conn.commit()
-    conn.close()
 
 def enrich_with_signal_score(article_dict, query=""):
     pub_date_str = article_dict.get('published_date', '')
@@ -191,8 +229,15 @@ def enrich_with_signal_score(article_dict, query=""):
     return article_dict
 
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
+
+@app.route('/login')
+def login():
+    return render_template('login.html')
+
+
 
 @app.route('/scrape', methods=['GET'])
 def scrape():
@@ -314,7 +359,6 @@ def scrape():
                 except sqlite3.ProgrammingError:
                     pass # Handled slightly differently for differing col layouts if any, but they match 8 cols here.
     conn.commit()
-    conn.close()
     return jsonify({"status": "success", "message": f"Scraping completed for {target_domain}. Found {count} potential updates."})
 
 @app.route('/search', methods=['GET'])
@@ -324,7 +368,7 @@ def search():
     
     conn = get_db_connection()
     
-    where_clauses = ['deleted = 0']
+    where_clauses = ['a.deleted = 0']
     where_params = []
     
     if query:
@@ -335,9 +379,8 @@ def search():
         where_params.append(domain)
         
     where_sql = ' AND '.join(where_clauses)
-    a_where_sql = ' AND '.join([c.replace('title', 'a.title').replace('description', 'a.description').replace('domain', 'a.domain') for c in where_clauses])
     
-    count_sql = f'SELECT COUNT(*) FROM articles WHERE {where_sql}'
+    count_sql = f'SELECT COUNT(*) FROM articles a WHERE {where_sql}'
     total_count = conn.execute(count_sql, where_params).fetchone()[0]
 
     sql = f'''
@@ -346,12 +389,11 @@ def search():
                COALESCE(MAX(CASE WHEN v.user_id = ? THEN v.view_count ELSE 0 END), 0) as user_views
         FROM articles a
         LEFT JOIN article_views v ON a.id = v.article_id
-        WHERE {a_where_sql}
+        WHERE {where_sql}
         GROUP BY a.id ORDER BY a.id DESC LIMIT 50
     '''
     params = [request.args.get('user_id', 1)] + where_params
     articles = conn.execute(sql, params).fetchall()
-    conn.close()
     
     results = []
     for article in articles:
@@ -378,7 +420,6 @@ def suggestions():
     params = [f'%{query}%']
     
     rows = conn.execute(sql, params).fetchall()
-    conn.close()
     
     return jsonify([row['title'] for row in rows])
 
@@ -386,7 +427,6 @@ def suggestions():
 def get_domains():
     conn = get_db_connection()
     rows = conn.execute('SELECT name FROM interested_domains ORDER BY name ASC').fetchall()
-    conn.close()
     return jsonify([row['name'] for row in rows])
 
 @app.route('/add-domain', methods=['POST'])
@@ -403,8 +443,6 @@ def add_domain():
         return jsonify({'status': 'success', 'message': f'Domain {domain_name} added'})
     except sqlite3.IntegrityError:
         return jsonify({'status': 'info', 'message': f'Domain {domain_name} already exists'})
-    finally:
-        conn.close()
 
 @app.route('/remove-domain', methods=['POST'])
 def remove_domain():
@@ -416,7 +454,6 @@ def remove_domain():
     conn = get_db_connection()
     conn.execute('DELETE FROM interested_domains WHERE name = ?', (domain_name,))
     conn.commit()
-    conn.close()
     return jsonify({'status': 'success', 'message': f'Domain {domain_name} removed'})
 
 @app.route('/available-domains', methods=['GET'])
@@ -446,7 +483,6 @@ def extract_domain_data():
     domains = conn.execute('SELECT name FROM interested_domains').fetchall()
     
     if not domains:
-        conn.close()
         return jsonify({"status": "success", "message": "No interested domains to extract for."})
     
     count = 0
@@ -493,7 +529,6 @@ def extract_domain_data():
                     print(f"DB Error inserting article: {e}")
             
     conn.commit()
-    conn.close()
     
     return jsonify({"status": "success", "message": f"Successfully extracted {count} new articles for interested domains."})
 
@@ -506,7 +541,6 @@ def get_articles():
     domain_names = [d['name'] for d in domains]
     
     if not domain_names:
-        conn.close()
         return jsonify([])
         
     # Create the placeholder string dynamically (?, ?, ?)
@@ -528,7 +562,6 @@ def get_articles():
     
     query_params = [request.args.get('user_id', 1)] + domain_names
     articles = conn.execute(sql, query_params).fetchall()
-    conn.close()
     
     results = []
     for article in articles:
@@ -550,7 +583,6 @@ def save_article():
     conn = get_db_connection()
     conn.execute('UPDATE articles SET saved = 1 WHERE id = ?', (article_id,))
     conn.commit()
-    conn.close()
     return jsonify({"status": "success"})
 
 @app.route('/unsave', methods=['POST'])
@@ -559,21 +591,18 @@ def unsave_article():
     conn = get_db_connection()
     conn.execute('UPDATE articles SET saved = 0 WHERE id = ?', (article_id,))
     conn.commit()
-    conn.close()
     return jsonify({"status": "success"})
 
 @app.route('/saved', methods=['GET'])
 def get_saved():
     conn = get_db_connection()
     articles = conn.execute('SELECT * FROM articles WHERE saved = 1 AND deleted = 0 ORDER BY id DESC').fetchall()
-    conn.close()
     return jsonify([dict(article) for article in articles])
 
 @app.route('/saved-count', methods=['GET'])
 def get_saved_count():
     conn = get_db_connection()
     count = conn.execute('SELECT COUNT(*) FROM articles WHERE saved = 1 AND deleted = 0').fetchone()[0]
-    conn.close()
     return jsonify({"count": count})
 
 @app.route('/delete', methods=['POST'])
@@ -593,8 +622,6 @@ def delete_article():
         except Exception as e:
             conn.rollback()
             raise e
-        finally:
-            conn.close()
             
         return jsonify({"status": "success"})
     except Exception as e:
@@ -622,12 +649,9 @@ def analyze_article():
     else:
         sentiment = "Neutral"
     
-    # Extract keywords using simple string operations (no NLTK corpus needed)
-    stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
-                  'to', 'of', 'and', 'or', 'for', 'with', 'that', 'this', 'it', 'by',
-                  'as', 'from', 'has', 'have', 'will', 'been', 'not', 'but', 'its'}
-    raw_words = re.findall(r'\b[a-zA-Z]{4,}\b', text)
-    words = [w.lower() for w in raw_words if w.lower() not in stop_words]
+    # Extract keywords using simple string operations
+    raw_words = WORD_PATTERN_4.findall(text)
+    words = [w.lower() for w in raw_words if w.lower() not in STOP_WORDS]
     freq = {}
     for w in words:
         freq[w] = freq.get(w, 0) + 1
@@ -676,19 +700,12 @@ def trending_tags():
     conn = get_db_connection()
     # Get last 100 articles for fresh trends
     articles = conn.execute('SELECT title, description FROM articles ORDER BY id DESC LIMIT 100').fetchall()
-    conn.close()
-    
-    stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
-                  'to', 'of', 'and', 'or', 'for', 'with', 'that', 'this', 'it', 'by',
-                  'as', 'from', 'has', 'have', 'will', 'been', 'not', 'but', 'its', 'their', 'they',
-                  'more', 'about', 'how', 'who', 'what', 'where', 'when', 'why'}
-    
     freq = {}
     for article in articles:
         text = (article['title'] + " " + (article['description'] or "")).lower()
-        words = re.findall(r'\b[a-z]{5,}\b', text)
+        words = WORD_PATTERN_5.findall(text)
         for w in set(words): # Use set to count per article
-            if w not in stop_words:
+            if w not in STOP_WORDS:
                 freq[w] = freq.get(w, 0) + 1
                 
     top_tags = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:10]
@@ -699,7 +716,6 @@ def get_tags():
     try:
         conn = get_db_connection()
         articles = conn.execute("SELECT keywords FROM articles").fetchall()
-        conn.close()
         tag_counts = {}
         for row in articles:
             if row['keywords']:
@@ -726,7 +742,6 @@ def get_similar_articles():
         ).fetchone()
         
         if not target_article:
-            conn.close()
             return jsonify({"error": "Article not found"}), 404
             
         # Fetch candidate articles (excluding the selected one)
@@ -734,7 +749,6 @@ def get_similar_articles():
         candidates = conn.execute(
             "SELECT id, title, description, domain FROM articles WHERE id != ? ORDER BY published_date DESC LIMIT 50", (article_id,)
         ).fetchall()
-        conn.close()
         
         if not candidates:
             return jsonify({"similar_articles": []})
@@ -854,7 +868,6 @@ PREVIOUS ARTICLES:
                 res['link'] = row['link']
                 res['domain'] = row['domain']
                 res['source'] = row['source']
-        conn.close()
 
         return jsonify({"status": "success", "similar_articles": similarity_results})
 
@@ -862,122 +875,182 @@ PREVIOUS ARTICLES:
         print(f"Error finding similar articles: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/recommend-videos', methods=['GET'])
-def get_video_recommendations():
-    article_id = request.args.get('id', type=int)
+
+@app.route('/tts-script', methods=['GET', 'POST'])
+def generate_tts_script():
+    if request.method == 'POST':
+        data = request.json or {}
+        article_id = data.get('id')
+        summary_text = data.get('summary')
+    else:
+        article_id = request.args.get('id', type=int)
+        summary_text = None
+
     if not article_id:
         return jsonify({"error": "Article ID applies"}), 400
 
     try:
         conn = get_db_connection()
-        
-        # Fetch the selected article
         target_article = conn.execute(
-            "SELECT id, title, description, url_domain as domain, keywords FROM (SELECT id, title, description, domain as url_domain, keywords FROM articles) WHERE id = ?", (article_id,)
+            "SELECT title, description, domain FROM articles WHERE id = ?", (article_id,)
         ).fetchone()
-        conn.close()
         
         if not target_article:
             return jsonify({"error": "Article not found"}), 404
 
-        import json
-        recommendations = []
         target_text = f"Title: {target_article['title']}\nDescription: {target_article['description'] or 'N/A'}\nDomain: {target_article['domain']}"
+        if summary_text and len(summary_text.strip()) > 10:
+            target_text += f"\n\nProvided Summary to Convert:\n{summary_text}"
 
-        # Branch 1: Gemini LLM (if API key exists)
         if GEMINI_API_KEY:
             prompt_template = f"""
-Your task:
-Analyze the provided article and generate 5 highly relevant YouTube video recommendations using semantic understanding.
+Convert the provided summary text directly into a continuous, engaging voice narration script.
 
 Instructions:
-1. Understand the core topic of the article.
-2. Identify key entities (technology names, policies, events, skills, organizations).
-3. Identify article intent (tutorial, news update, analysis, interview, guide).
-4. Generate optimized YouTube search queries.
-5. Prefer:
-   - Educational channels
-   - Official sources
-   - High authority creators
-   - Recent videos (if topic is time-sensitive)
-6. Avoid:
-   - Clickbait
-   - Shorts unless topic is quick tutorial
-   - Irrelevant entertainment content
+- Read the exact provided summary text clearly as a single block of text.
+- Do not invent new words or add conversational filler; just seamlessly flow the provided summary.
 
-Return structured JSON exactly matching this schema:
-[
-  {{
-    "video_title": "Descriptive Video Title Idea",
-    "youtube_search_query": "Optimized search string",
-    "content_type": "tutorial/news/analysis/interview",
-    "relevance_score": 95,
-    "why_relevant": "Brief reason..."
-  }}
-]
+Output exactly this JSON format:
+{{
+  "voice_text": "The continuous narration script goes here..."
+}}
 
 ARTICLE TO ANALYZE:
 \"\"\"
 {target_text}
 \"\"\"
 """
-
-            # Call Gemini
             model = genai.GenerativeModel('gemini-1.5-flash')
-            # Instruct model to return JSON
             response = model.generate_content(
                 prompt_template,
                 generation_config=genai.types.GenerationConfig(
                     response_mime_type="application/json",
                 )
             )
-            
-            # Parse the JSON response
-            try:
-                recommendations = json.loads(response.text)
-            except json.JSONDecodeError:
-                print(f"Failed to parse Gemini JSON for videos: {response.text}")
-                return jsonify({"status": "error", "message": "Failed to parse AI Video generation"}), 500
-                
-            # Sort by relevance
-            if recommendations:
-                recommendations = sorted(recommendations, key=lambda x: int(x.get('relevance_score', 0)), reverse=True)[:5]
-
-        # Branch 2: Offline Fallback (Keywords)
+            script_content = response.text.strip()
         else:
-            # Create a generic fallback using standard article data
-            print("Gemini API missing. Using offline keyword video fallback.")
-            
-            from urllib.parse import quote_plus
-            
-            # Create search query from keywords or title
-            search_terms = target_article['keywords'] if target_article['keywords'] else target_article['title']
-            top_terms = " ".join([k.strip() for k in search_terms.split(',')] [:3]) if target_article['keywords'] else target_article['title']
-            
-            query = f"{top_terms} news explained"
-            
-            recommendations.append({
-                "video_title": f"Latest Analysis: {top_terms}",
-                "youtube_search_query": query,
-                "content_type": "analysis",
-                "relevance_score": 85,
-                "why_relevant": "Offline Fallback: Automatically generated search based on primary article keywords."
-            })
-            
-            recommendations.append({
-                "video_title": f"In-Depth: {top_terms}",
-                "youtube_search_query": f"{top_terms} documentary",
-                "content_type": "educational",
-                "relevance_score": 75,
-                "why_relevant": "Offline Fallback: Educational search generated from article domain keywords."
-            })
+            # Fallback if Gemini is not available
+            import json
+            print("Gemini API missing. Using offline TTS script fallback.")
+            fallback_scene = {
+                "voice_text": f"Here is the summarized data for {target_article['title']}: " + (summary_text if summary_text else "No summary available.")
+            }
+            script_content = json.dumps(fallback_scene)
 
-            
-        return jsonify({"status": "success", "recommendations": recommendations})
+        has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+
+        return jsonify({
+            "status": "success", 
+            "script": script_content,
+            "has_openai": has_openai
+        })
 
     except Exception as e:
-        print(f"Error finding video recommendations: {e}")
+        print(f"Error generating TTS script: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/generate-audio', methods=['POST'])
+def generate_audio():
+    data = request.json
+    text = data.get('text')
+    
+    if not text:
+        return jsonify({"error": "No text provided"}), 400
+        
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "OpenAI API Key missing"}), 500
+        
+    try:
+        openai_client = OpenAI(api_key=api_key)
+        response = openai_client.audio.speech.create(
+            model="tts-1",
+            voice="nova",
+            input=text
+        )
+        
+        buffer = BytesIO(response.content)
+        buffer.seek(0)
+        return send_file(buffer, mimetype="audio/mpeg")
+    except Exception as e:
+        print(f"Error generating audio: {e}")
+        return jsonify({"error": str(e)}), 500
+
+import base64
+
+@app.route('/generate-scene-assets', methods=['POST'])
+def generate_scene_assets():
+    data = request.json or {}
+    voice_text = data.get('narration') or data.get('voice_text')
+    visual_description = data.get('visual_description')
+    
+    if not voice_text or not visual_description:
+        return jsonify({"error": "Missing voice_text or visual_description"}), 400
+        
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "OpenAI API Key missing"}), 500
+        
+    try:
+        openai_client = OpenAI(api_key=api_key)
+        
+        # 1. Generate Image (DALL-E 3)
+        image_response = openai_client.images.generate(
+            model="dall-e-3",
+            prompt=f"A high-quality educational illustration or photo suitable for a video presentation: {visual_description}. No text in the image. Professional, cinematic lighting.",
+            size="1024x1024",
+            quality="standard",
+            n=1,
+            response_format="b64_json"
+        )
+        image_b64 = image_response.data[0].b64_json
+        
+        # 2. Generate Audio (TTS)
+        response_audio = openai_client.audio.speech.create(
+            model="tts-1",
+            voice="nova",
+            input=voice_text[:4000]
+        )
+        audio_b64 = base64.b64encode(response_audio.content).decode('utf-8')
+        
+        return jsonify({
+            "status": "success",
+            "image_b64": image_b64,
+            "audio_b64": audio_b64
+        })
+        
+    except Exception as e:
+        print(f"Error generating scene assets: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/save-api-keys', methods=['POST'])
+def save_api_keys():
+    data = request.json
+    openai_key = data.get('openai_key')
+    gemini_key = data.get('gemini_key')
+    
+    env_vars = {}
+    if os.path.exists('.env'):
+        with open('.env', 'r') as f:
+            for line in f:
+                if '=' in line:
+                    key, val = line.strip().split('=', 1)
+                    env_vars[key] = val
+                    
+    if openai_key:
+        env_vars['OPENAI_API_KEY'] = openai_key
+        os.environ['OPENAI_API_KEY'] = openai_key
+        
+    if gemini_key:
+        env_vars['GEMINI_API_KEY'] = gemini_key
+        os.environ['GEMINI_API_KEY'] = gemini_key
+        genai.configure(api_key=gemini_key)
+        
+    with open('.env', 'w') as f:
+        for k, v in env_vars.items():
+            f.write(f"{k}={v}\n")
+            
+    return jsonify({"status": "success", "message": "API Keys saved successfully."})
 
 @app.route('/track-usage', methods=['POST'])
 def track_usage():
@@ -1015,8 +1088,6 @@ def track_usage():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 @app.route('/deep_summary', methods=['GET'])
 def deep_summary():
@@ -1045,12 +1116,27 @@ def deep_summary():
             except Exception as e:
                 print(f"DEBUG Summary: Google News Decode failed: {e}")
 
-        # 1. Guaranteed Content Extraction using Newspaper3k
-        article_obj = Article(actual_url)
-        article_obj.download()
-        article_obj.parse()
-        
-        text = article_obj.text
+        # 1. Guaranteed Content Extraction using Newspaper3k with Fallback
+        text = ""
+        try:
+            article_obj = Article(actual_url)
+            article_obj.download()
+            article_obj.parse()
+            text = article_obj.text
+        except Exception as e:
+            print(f"DEBUG Summary: Newspaper3k download failed: {e}. Attempting manual fetch fallback.", flush=True)
+            try:
+                # Custom requests session to bypass bot-blockers (e.g. Forbes 403 Max Restarts)
+                session = requests.Session()
+                resp = session.get(actual_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                
+                article_obj = Article(actual_url)
+                article_obj.set_html(resp.content)
+                article_obj.parse()
+                text = article_obj.text
+            except Exception as e2:
+                print(f"DEBUG Summary: Manual fetch fallback also failed: {e2}", flush=True)
         print(f"DEBUG Summary: Newspaper3k extracted text length: {len(text)}", flush=True)
 
         if len(text) < 200:
@@ -1145,74 +1231,7 @@ ARTICLE TEXT:
         sentences = valid_sentences
         print(f"DEBUG Summary: Total sentences after filtering: {len(sentences)}", flush=True)
 
-        # Extract keywords for scoring
-        stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
-                      'to', 'of', 'and', 'or', 'for', 'with', 'that', 'this', 'it', 'by',
-                      'as', 'from', 'has', 'have', 'will', 'been', 'not', 'but', 'its', 'their', 'they'}
-        words = [w.lower() for w in re.findall(r'\b[a-zA-Z]{5,}\b', text) if w.lower() not in stop_words]
-        freq = {}
-        for w in words: freq[w] = freq.get(w, 0) + 1
-        top_keywords = sorted(freq, key=freq.get, reverse=True)[:15]
-
-        total_sentences = len(sentences)
-
-        # Score sentences
-        def score_sentence(s, idx):
-            s_lower = s.lower()
-            # 1. Keyword density
-            score = sum(1.5 for k in top_keywords if k in s_lower)
-            
-            # Positional score (heavily reward introduction)
-            pos_ratio = idx / max(1, total_sentences)
-            if pos_ratio < 0.1: score += 5.0
-            elif pos_ratio < 0.2: score += 3.0
-            elif pos_ratio > 0.8: score += 2.0
-            
-            # 2. Argument/Conclusion markers
-            arg_markers = ['argue', 'claim', 'suggest', 'however', 'because', 'therefore', 'consequently', 'result']
-            conc_markers = ['conclude', 'summarized', 'finally', 'overall', 'in short', 'ultimate', 'key takeaway']
-            if any(m in s_lower for m in arg_markers): score += 3.0
-            if any(m in s_lower for m in conc_markers): score += 5.0
-            
-            # 3. Penalize very long or overly short sentences
-            words_in_s = len(s.split())
-            if words_in_s > 40: score -= 2.0
-            if words_in_s < 10: score -= 1.0
-            
-            return score
-
-        # Selection with Novelty Filter (Simple overlap check)
-        def get_similarity(s1, s2):
-            w1 = set(s1.lower().split())
-            w2 = set(s2.lower().split())
-            if not w1 or not w2: return 0
-            return len(w1 & w2) / len(w1 | w2)
-
-        scored_sentences = [(s, score_sentence(s, i)) for i, s in enumerate(sentences)]
-        scored_sentences.sort(key=lambda x: x[1], reverse=True)
-        
-        selected = []
-        word_count = 0
-        for s, _ in scored_sentences:
-            # Check for repetition
-            is_repetitive = False
-            for prev in selected:
-                if get_similarity(s, prev) > 0.4: # Over 40% word overlap
-                    is_repetitive = True
-                    break
-            
-            if not is_repetitive:
-                selected.append(s)
-                word_count += len(s.split())
-                if word_count >= 180: # Targeted range 150-200
-                    break
-        
-        # Order by occurrence in text for flow
-        final_sentences = [s for s in sentences if s in selected]
-        
-        print(f"DEBUG Summary: Final selected sentences: {len(final_sentences)}", flush=True)
-
-        if len(final_sentences) == 0:
+        if len(sentences) == 0:
             # Fallback to Newspaper3k's built-in NLP summary
             try:
                 article_obj.nlp()
@@ -1226,13 +1245,62 @@ ARTICLE TEXT:
                     })
             except Exception as e:
                 print(f"DEBUG Summary: NLP Fallback failed: {e}")
+            return jsonify({
+                 "summary_points": [],
+                 "summary": "Extraction failed: Not enough parsable text.",
+                 "status": "error"
+            }), 500
 
-        return jsonify({
-            "summary_points": final_sentences,
-            "summary": ' '.join(final_sentences), 
-            "word_count": len(' '.join(final_sentences).split()),
-            "status": "success"
-        })
+        # ML-Based Extractive Summarization (TextRank Approximation via TF-IDF matrix)
+        import numpy as np
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        
+        try:
+            # 1. Vectorize valid sentences into a TF-IDF matrix
+            vectorizer = TfidfVectorizer(stop_words='english')
+            tfidf_matrix = vectorizer.fit_transform(sentences)
+            
+            # 2. Compute Cosine Similarity between all sentences
+            sim_matrix = cosine_similarity(tfidf_matrix, tfidf_matrix)
+            
+            # 3. Calculate "Centrality" (importance) of each sentence
+            scores = np.sum(sim_matrix, axis=1)
+            
+            # 4. Extract Top Sentences
+            num_sentences = min(5, len(sentences))
+            ranked_indices = np.argsort(scores)[::-1] # indices of top scores
+            top_indices = ranked_indices[:num_sentences]
+            
+            # 5. Restore Chronological Order
+            top_indices_sorted = sorted(top_indices)
+            top_sentences = [sentences[i] for i in top_indices_sorted]
+            
+            # Compile final paragraph
+            summary = " ".join(top_sentences)
+            
+            # Generate summary points (take the top 3 highest scoring sentences)
+            summary_points_indices = ranked_indices[:min(3, len(sentences))]
+            summary_points = [sentences[i] for i in summary_points_indices]
+
+            return jsonify({
+                "summary_points": summary_points,
+                "summary": summary,
+                "word_count": len(summary.split()),
+                "status": "success",
+                "mode": "ml_extractive"
+            })
+            
+        except Exception as ml_err:
+             print(f"DEBUG Summary: ML Summarizer failed: {ml_err}", flush=True)
+             fallback_summary = " ".join(sentences[:min(5, len(sentences))])
+             return jsonify({
+                 "summary_points": [],
+                 "summary": fallback_summary,
+                 "word_count": len(fallback_summary.split()),
+                 "status": "warning",
+                 "mode": "fallback_extractive"
+             })
 
     except Exception as e:
         print(f"Deep Summary Error: {str(e)}")
@@ -1244,7 +1312,8 @@ ARTICLE TEXT:
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True, port=5001)
+    app.run(host='0.0.0.0', debug=True, port=5003)
 else:
     # Ensure DB is initialized when running with a WSGI server
-    init_db()
+    with app.app_context():
+        init_db()
