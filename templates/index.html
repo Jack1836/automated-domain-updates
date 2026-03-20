@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Content Aggregator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+    <header>
+        <div class="header-left">
+            <button id="menu-toggle" class="icon-btn"><i class="fas fa-bars"></i></button>
+            <div class="app-logo">
+                <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#2563eb;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#10b981;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M50 5 L90 25 L90 75 L50 95 L10 75 L10 25 Z" fill="url(#logo-gradient)" opacity="0.15" />
+                    <path d="M50 15 L82 32 L82 68 L50 85 L18 68 L18 32 Z" stroke="url(#logo-gradient)" stroke-width="4"
+                        fill="none" />
+                    <circle cx="50" cy="50" r="12" fill="url(#logo-gradient)" />
+                    <path d="M35 35 L50 50 M65 35 L50 50 M35 65 L50 50 M65 65 L50 50" stroke="url(#logo-gradient)"
+                        stroke-width="3" stroke-linecap="round" />
+                    <circle cx="35" cy="35" r="4" fill="url(#logo-gradient)" />
+                    <circle cx="65" cy="35" r="4" fill="url(#logo-gradient)" />
+                    <circle cx="35" cy="65" r="4" fill="url(#logo-gradient)" />
+                    <circle cx="65" cy="65" r="4" fill="url(#logo-gradient)" />
+                </svg>
+            </div>
+            <h1 id="app-name">Smart Content Aggregator</h1>
+        </div>
+        <div class="header-right">
+            <!-- Saved Articles button was removed here as it is available in the sidebar -->
+        </div>
+    </header>
+
+    <div class="main-container">
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>Menu</h3>
+                <button id="close-sidebar" class="icon-btn"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="sidebar-section">
+                <h4>Selected Domains</h4>
+                <div class="domain-search">
+                    <div class="search-wrapper">
+                        <input type="text" id="domain-search-input" placeholder="Search categories...">
+                    </div>
+                    <i class="fas fa-search"></i>
+                    <div id="domain-suggestions" class="suggestions-dropdown" style="display: none;"></div>
+                </div>
+                <ul class="domain-list" id="domain-list">
+                    <li class="domain-item active" data-domain="All">All</li>
+                </ul>
+            </div>
+            <div class="sidebar-section">
+                <h4>Trending Topics</h4>
+                <div id="trending-topics-cloud" class="trending-cloud">
+                    <div class="loader-small">Analyzing trends...</div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <ul class="sidebar-menu">
+                    <li id="sidebar-notifications-btn">
+                        <i class="fas fa-bell"></i>
+                        <span>Notifications</span>
+                        <span id="notif-badge" class="badge">0</span>
+                    </li>
+                    <li id="sidebar-saved-btn">
+                        <i class="fas fa-bookmark"></i>
+                        <span>Saved Articles</span>
+                    </li>
+                </ul>
+            </div>
+            <div class="sidebar-section ai-mode-section">
+                <div class="ai-mode-header">
+                    <i class="fas fa-magic"></i>
+                    <span>AI Summary Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="ai-summary-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <p class="ai-mode-desc">Condense descriptions into short AI summaries automatically.</p>
+            </div>
+        </aside>
+
+        <main class="content">
+            <div class="search-section">
+                <div class="search-bar">
+                    <div class="search-wrapper">
+                        <input type="text" id="search-input" placeholder="Search articles by keyword...">
+                    </div>
+                    <button id="search-btn" class="primary-btn">Search</button>
+                    <button id="refresh-btn" class="icon-btn" title="Refresh Live Content"><i
+                            class="fas fa-sync-alt"></i></button>
+                    <div id="search-suggestions" class="suggestions-dropdown" style="display: none;"></div>
+                </div>
+                <div class="sentiment-filters" id="sentiment-filters">
+                    <span class="filter-label">Filter by Sentiment:</span>
+                    <button class="sentiment-filter active" data-sentiment="all">All</button>
+                    <button class="sentiment-filter positive" data-sentiment="Positive">🟢 Positive</button>
+                    <button class="sentiment-filter neutral" data-sentiment="Neutral">⚪ Neutral</button>
+                    <button class="sentiment-filter negative" data-sentiment="Negative">🔴 Negative</button>
+                </div>
+            </div>
+
+            <div id="results-count" class="results-count"></div>
+
+            <div id="articles-grid" class="articles-grid">
+                <!-- Articles will be loaded here -->
+                <div class="loader">Loading articles...</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Quick View Article Modal -->
+    <div id="article-modal-overlay" class="modal-overlay">
+        <div id="article-modal" class="article-modal">
+            <div class="modal-header">
+                <div class="modal-source-row">
+                    <span id="modal-source"></span>
+                    <span id="modal-domain"></span>
+                    <span id="modal-sentiment-badge"></span>
+                </div>
+                <button id="close-modal"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <h2 id="modal-title"></h2>
+                <div id="modal-keywords" class="keyword-tags" style="margin: 0.8rem 0;"></div>
+                <p id="modal-desc"></p>
+
+                <div class="modal-nlp-section">
+                    <h4><i class="fas fa-chart-bar"></i> NLP Analysis</h4>
+                    <div class="nlp-stats" id="modal-nlp-stats">
+                        <div class="nlp-stat">
+                            <span class="nlp-label">Sentiment</span>
+                            <span id="modal-nlp-sentiment" class="nlp-value">—</span>
+                        </div>
+                        <div class="nlp-stat">
+                            <span class="nlp-label">Polarity</span>
+                            <span id="modal-nlp-polarity" class="nlp-value">—</span>
+                        </div>
+                        <div class="nlp-stat">
+                            <span class="nlp-label">Top Keywords</span>
+                            <span id="modal-nlp-keywords" class="nlp-value">—</span>
+                        </div>
+                    </div>
+                    <div class="polarity-bar-wrap">
+                        <span class="polarity-neg">Negative</span>
+                        <div class="polarity-bar">
+                            <div id="modal-polarity-fill" class="polarity-fill"></div>
+                            <div id="modal-polarity-marker" class="polarity-marker"></div>
+                        </div>
+                        <span class="polarity-pos">Positive</span>
+                    </div>
+                </div>
+
+                <!-- NEW: Deep Summary Section -->
+                <div id="modal-deep-summary-section" class="modal-nlp-section deep-sum-section" style="display: none;">
+                    <h4><i class="fas fa-file-alt"></i> Deep Summary (150-200 words)</h4>
+                    <div id="modal-deep-summary-content" class="deep-summary-content"
+                        style="color: var(--text-main); font-size: 0.9rem; line-height: 1.6; margin-top: 0.5rem;">
+                        <!-- Content will be injected here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <a id="modal-read-link" href="#" target="_blank" class="primary-btn"><i
+                        class="fas fa-external-link-alt"></i> Read Full</a>
+                <button id="modal-deep-sum-btn" class="primary-btn deep-sum-btn"
+                    style="background: linear-gradient(135deg, #6e8efb, #a777e3); border: none; margin-left: auto;">
+                    <i class="fas fa-bolt"></i> Summarize Detailed
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>

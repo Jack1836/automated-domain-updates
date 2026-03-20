@@ -1,0 +1,27 @@
+.dashboard-header {
+    margin-bottom: 32px;
+}
+
+.dashboard-header h1 {
+    font-size: 32px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.dashboard-header p {
+    color: var(--text-secondary);
+    font-size: 16px;
+}
+
+.content-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+@media (max-width: 768px) {
+    .content-grid {
+        grid-template-columns: 1fr;
+    }
+}
