@@ -3,3 +3,13 @@ requests
 beautifulsoup4
 lxml
 textblob
+flask_cors
+openai
+google-generativeai
+python-dotenv
+newspaper3k
+googlenewsdecoder
+lxml_html_clean
+redis
+gunicorn
+
