@@ -430,11 +430,85 @@ input:checked+.slider:before {
     font-size: 0.8rem;
 }
 
-/* Content */
+/* Premium Segmented Control Header */
+.module-tabs {
+    display: inline-flex;
+    background: #f1f5f9;
+    padding: 0.35rem;
+    border-radius: 999px;
+    margin-bottom: 2rem;
+    align-self: center;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    margin-left: auto;
+    margin-right: auto;
+    width: fit-content;
+}
+
+.module-tab {
+    padding: 0.6rem 1.4rem;
+    font-size: 0.92rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.7rem;
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    color: #64748b;
+    background: transparent;
+    white-space: nowrap;
+}
+
+.module-tab i {
+    font-size: 1rem;
+    transition: transform 0.3s ease;
+}
+
+.module-tab:hover {
+    color: #1e293b;
+    background: rgba(0, 0, 0, 0.03);
+}
+
+.module-tab:hover i {
+    transform: translateY(-1px);
+}
+
+.module-tab.active-tab {
+    background-color: var(--primary-blue);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(0, 122, 255, 0.25);
+}
+
+/* Specific Green color for Schemes when active */
+#tab-gov-schemes.active-tab {
+    background: linear-gradient(135deg, #10b981, #059669);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+}
+
+.module-tab.inactive-tab {
+    opacity: 0.8;
+}
+
+.module-tab.active-tab i {
+    animation: pulseIcon 2s infinite;
+}
+
+@keyframes pulseIcon {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+/* Ensure centering in the main content area */
 .content {
     flex: 1;
     padding: 2.5rem;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Sentiment Filter Bar */
@@ -618,6 +692,95 @@ input:checked+.slider:before {
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 2rem;
     padding: 1rem 0;
+}
+
+/* Government Schemes Compact High-Density Grid */
+.schemes-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1rem;
+    padding: 0.8rem;
+    width: 100%;
+}
+
+.schemes-dashboard .article-card {
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+
+.article-image, .scheme-image {
+    width: 100%;
+    height: 180px;
+    overflow: hidden;
+    background: #f1f5f9;
+}
+
+.article-image img, .scheme-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+}
+
+.unique-image-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(30, 41, 59, 0.75);
+    backdrop-filter: blur(4px);
+    color: white;
+    padding: 0.3rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.article-card:hover .article-image img, .scheme-card:hover .scheme-image img {
+    transform: scale(1.05);
+}
+
+.article-body, .scheme-card-body {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.schemes-dashboard .article-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 12px -3px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+    border-color: var(--primary-blue);
+}
+
+.schemes-dashboard .article-card h3 {
+    font-size: 0.95rem !important;
+    line-height: 1.3 !important;
+    margin-bottom: 0.6rem !important;
+    font-weight: 800 !important;
+}
+
+.schemes-dashboard .article-card p {
+    font-size: 0.82rem !important;
+    line-height: 1.4 !important;
+    margin-bottom: 1rem !important;
+    color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+    .schemes-dashboard {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
 }
 
 /* Sentiment Indicators */
@@ -1122,4 +1285,44 @@ input:checked+.slider:before {
 
 .secondary-btn:hover {
     background: var(--soft-blue);
+}
+
+/* ===================== */
+/* SCHEMES DASHBOARD    */
+/* ===================== */
+
+.schemes-dashboard {
+    display: flex;
+    gap: 1.5rem;
+    flex-direction: column;
+    gap: 2.5rem;
+    padding: 1rem;
+    width: 100%;
+}
+
+.category-section {
+    width: 100%;
+}
+
+.category-section h2 {
+    font-size: 1.4rem;
+    color: var(--text-main);
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 2px solid var(--soft-blue);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+@media (max-width: 768px) {
+    .schemes-dashboard {
+        flex-direction: column;
+        overflow-x: hidden;
+    }
+    .category-column {
+        flex: 1 1 auto;
+        width: 100%;
+        max-height: none;
+    }
 }

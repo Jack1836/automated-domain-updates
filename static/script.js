@@ -11,14 +11,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsCount = document.getElementById('results-count');
     const sidebarSavedBtn = document.getElementById('sidebar-saved-btn');
 
-    let currentDomain = 'All';
+    let currentDomain = localStorage.getItem('currentDomain') || 'All';
     let lastKnownNewsId = null;
     let lastKnownTechId = null;
     let newUpdates = [];
     let activeSentimentFilter = 'all';
     let aiSummaryMode = false;
+    let currentViewMode = localStorage.getItem('currentViewMode') || 'updates'; // 'updates' or 'schemes'
     const trackedArticles = new Set(); // Session debounce
     const currentUserId = 1; // Mocked user id
+
+    const saveState = () => {
+        localStorage.setItem('currentDomain', currentDomain);
+        localStorage.setItem('currentViewMode', currentViewMode);
+    };
 
 
     const notifBtn = document.getElementById('sidebar-notifications-btn');
@@ -154,9 +160,14 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshBtn.disabled = true;
 
         try {
-            const url = `/scrape?domain=${encodeURIComponent(currentDomain)}`;
+            const domainToScrape = currentViewMode === 'schemes' ? 'Government Schemes' : currentDomain;
+            const url = `/scrape?domain=${encodeURIComponent(domainToScrape)}`;
             await fetch(url);
-            await fetchArticles();
+            if (currentViewMode === 'schemes') {
+                await fetchGovernmentSchemes();
+            } else {
+                await fetchArticles();
+            }
         } catch (error) {
             console.error('Error refreshing:', error);
         } finally {
@@ -196,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (e.target.closest('.remove-domain-btn')) return;
                     setActiveTab(item);
                     currentDomain = item.getAttribute('data-domain');
+                    saveState();
                     fetchArticles();
                     if (window.innerWidth <= 768) sidebar.classList.remove('open');
                 });
@@ -450,71 +462,240 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sidebarSavedBtn.addEventListener('click', () => showSaved(sidebarSavedBtn));
 
-    // Settings Modal Handlers
-    sidebarSettingsBtn.addEventListener('click', () => {
-        settingsModalOverlay.style.display = 'flex';
-        settingsMessage.style.display = 'none';
-        if (window.innerWidth <= 768) sidebar.classList.remove('open');
-    });
+    // Top Tabs Module Selection
+    const tabDomainUpdates = document.getElementById('tab-domain-updates');
+    const tabGovSchemes = document.getElementById('tab-gov-schemes');
+    const mainSearchSection = document.getElementById('main-search-section');
 
-    closeSettingsModalBtn.addEventListener('click', () => {
-        settingsModalOverlay.style.display = 'none';
-    });
+    const activateDomainUpdates = () => {
+        currentViewMode = 'updates';
+        if (articlesGrid) articlesGrid.className = 'articles-grid';
+        if (tabDomainUpdates && tabGovSchemes) {
+            tabDomainUpdates.classList.add('active-tab');
+            tabDomainUpdates.classList.remove('inactive-tab');
+            
+            tabGovSchemes.classList.add('inactive-tab');
+            tabGovSchemes.classList.remove('active-tab');
 
-    settingsModalOverlay.addEventListener('click', (e) => {
-        if (e.target === settingsModalOverlay) settingsModalOverlay.style.display = 'none';
-    });
-
-    settingsSaveBtn.addEventListener('click', async () => {
-        const openai_key = settingsOpenaiKey.value.trim();
-        const gemini_key = settingsGeminiKey.value.trim();
-
-        if (!openai_key && !gemini_key) {
-            settingsMessage.textContent = 'Please enter at least one API key to save.';
-            settingsMessage.style.display = 'block';
-            settingsMessage.style.backgroundColor = '#fee2e2';
-            settingsMessage.style.color = '#dc2626';
-            return;
+            if (mainSearchSection) mainSearchSection.style.display = 'block';
+            document.querySelector('.search-controls').style.display = 'flex';
+            const sDomain = document.getElementById('sidebar-domain-content');
+            if (sDomain) sDomain.style.display = 'block';
+            const sScheme = document.getElementById('sidebar-scheme-content');
+            if (sScheme) sScheme.style.display = 'none';
         }
+        saveState();
+        fetchArticles();
+    };
 
-        settingsSaveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-        settingsSaveBtn.disabled = true;
-
-        try {
-            const resp = await fetch('/save-api-keys', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ openai_key, gemini_key })
+    const fetchGovernmentSchemes = async (sectorFilter = 'All') => {
+        // Guard: If an Event object is passed (tab clicks), default to 'All'
+        if (typeof sectorFilter !== 'string') sectorFilter = 'All';
+        
+        currentViewMode = 'schemes';
+        saveState();
+        
+        // Sync Sidebar UI
+        const schemeSectorList = document.getElementById('scheme-sector-list');
+        if (schemeSectorList) {
+            schemeSectorList.querySelectorAll('.domain-item').forEach(li => {
+                if (li.getAttribute('data-sector') === sectorFilter || (sectorFilter === 'All' && !li.getAttribute('data-sector'))) {
+                    li.classList.add('active');
+                } else {
+                    li.classList.remove('active');
+                }
             });
-            const data = await resp.json();
-
-            if (data.status === 'success') {
-                settingsMessage.textContent = 'API Keys saved successfully! You can now use AI features.';
-                settingsMessage.style.display = 'block';
-                settingsMessage.style.backgroundColor = '#dcfce7';
-                settingsMessage.style.color = '#16a34a';
-                settingsOpenaiKey.value = '';
-                settingsGeminiKey.value = '';
-
-                setTimeout(() => {
-                    settingsModalOverlay.style.display = 'none';
-                }, 2000);
-            } else {
-                throw new Error(data.message || 'Failed to save keys');
-            }
-        } catch (error) {
-            settingsMessage.textContent = error.message;
-            settingsMessage.style.display = 'block';
-            settingsMessage.style.backgroundColor = '#fee2e2';
-            settingsMessage.style.color = '#dc2626';
-        } finally {
-            settingsSaveBtn.innerHTML = '<i class="fas fa-save"></i> Save Configuration';
-            settingsSaveBtn.disabled = false;
         }
-    });
+        if (tabDomainUpdates && tabGovSchemes) {
+            tabGovSchemes.classList.add('active-tab');
+            tabGovSchemes.classList.remove('inactive-tab');
+            
+            tabDomainUpdates.classList.add('inactive-tab');
+            tabDomainUpdates.classList.remove('active-tab');
+
+            if (mainSearchSection) mainSearchSection.style.display = 'none';
+            const sDomain = document.getElementById('sidebar-domain-content');
+            if (sDomain) sDomain.style.display = 'none';
+            const sScheme = document.getElementById('sidebar-scheme-content');
+            if (sScheme) sScheme.style.display = 'block';
+        }
+
+        articlesGrid.innerHTML = '<div class="loader">Fetching Open Data schemes...</div>';
+        resultsCount.innerText = '';
+        const searchControls = document.querySelector('.search-controls');
+        if (searchControls) searchControls.style.display = 'none'; // hide normal filters
+        
+        try {
+            const schemeUrl = sectorFilter === 'All' ? '/api/v1/schemes' : `/api/v1/schemes?sector=${encodeURIComponent(sectorFilter)}`;
+            const response = await fetch(schemeUrl);
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                let html = '';
+                
+                data.schemes.forEach(s => {
+                    html += `
+                        <div class="article-card">
+                            <div class="scheme-card-body">
+                                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                                    <h3 title="${s.title.replace(/"/g, '&quot;')}">${s.title}</h3>
+                                    <button class="save-scheme-btn icon-btn" title="Save Scheme" data-scheme='${JSON.stringify(s).replace(/'/g, "&apos;")}' style="padding: 2px;">
+                                        <i class="far fa-bookmark" style="font-size: 1.1rem; color: #94a3b8;"></i>
+                                    </button>
+                                </div>
+                                <div style="display: flex; gap: 0.3rem; margin-bottom: 0.8rem; flex-wrap: wrap;">
+                                    <span style="background: var(--soft-blue); color: var(--primary-blue); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase;">${s.sector}</span>
+                                    <span style="background: #f1f5f9; color: #64748b; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700;">${s.state}</span>
+                                </div>
+                                <p>${s.desc}</p>
+                                <a href="${s.link}" target="_blank" class="primary-btn" style="text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.5rem; border-radius: 8px; font-size: 0.8rem; width: 100%; font-weight: 700; margin-top: auto;">View Scheme <i class="fas fa-external-link-alt" style="font-size: 0.7rem;"></i></a>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                articlesGrid.className = 'schemes-dashboard'; 
+                articlesGrid.innerHTML = html;
+                resultsCount.innerText = `${data.schemes.length} schemes displayed`;
+
+                // Re-attach save listeners
+                const saveSchemeBtns = document.querySelectorAll('.save-scheme-btn');
+                saveSchemeBtns.forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const scheme = JSON.parse(btn.getAttribute('data-scheme').replace(/&apos;/g, "'"));
+                        const icon = btn.querySelector('i');
+                        icon.className = 'fas fa-spinner fa-spin';
+                        try {
+                            const res = await fetch('/save-scheme', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(scheme)
+                            });
+                            if (res.ok) {
+                                icon.className = 'fas fa-bookmark';
+                                icon.style.color = '#10b981';
+                            } else {
+                                icon.className = 'far fa-bookmark';
+                            }
+                        } catch (err) {
+                            icon.className = 'far fa-bookmark';
+                        }
+                    });
+                });
+            }
+        } catch (err) {
+            articlesGrid.innerHTML = '<div class="error-msg">Failed to connect to Government Data registry.</div>';
+        }
+    };
+
+    // Scheme Sector List Listeners
+    const schemeSectorList = document.getElementById('scheme-sector-list');
+    if (schemeSectorList) {
+        schemeSectorList.querySelectorAll('.domain-item').forEach(item => {
+            item.addEventListener('click', () => {
+                schemeSectorList.querySelectorAll('.domain-item').forEach(li => li.classList.remove('active'));
+                item.classList.add('active');
+                const sector = item.getAttribute('data-sector') || 'All';
+                fetchGovernmentSchemes(sector);
+            });
+        });
+    }
+
+    if (tabDomainUpdates) tabDomainUpdates.addEventListener('click', activateDomainUpdates);
+    if (tabGovSchemes) tabGovSchemes.addEventListener('click', () => fetchGovernmentSchemes('All'));
+
+    // View Government Schemes (Sidebar)
+    const sidebarSchemesBtn = document.getElementById('sidebar-schemes-btn');
+    if (sidebarSchemesBtn) {
+        sidebarSchemesBtn.addEventListener('click', () => {
+            setActiveTab(sidebarSchemesBtn);
+            if (window.innerWidth <= 768) sidebar.classList.remove('open');
+            fetchGovernmentSchemes();
+        });
+    }
+
+    // Settings Modal Handlers
+    if (sidebarSettingsBtn) {
+        sidebarSettingsBtn.addEventListener('click', () => {
+            if (settingsModalOverlay) settingsModalOverlay.style.display = 'flex';
+            if (settingsMessage) settingsMessage.style.display = 'none';
+            if (window.innerWidth <= 768) sidebar.classList.remove('open');
+        });
+    }
+
+    if (closeSettingsModalBtn) {
+        closeSettingsModalBtn.addEventListener('click', () => {
+            if (settingsModalOverlay) settingsModalOverlay.style.display = 'none';
+        });
+    }
+
+    if (settingsModalOverlay) {
+        settingsModalOverlay.addEventListener('click', (e) => {
+            if (e.target === settingsModalOverlay) settingsModalOverlay.style.display = 'none';
+        });
+    }
+
+    if (settingsSaveBtn) {
+        settingsSaveBtn.addEventListener('click', async () => {
+            const openai_key = settingsOpenaiKey.value.trim();
+            const gemini_key = settingsGeminiKey.value.trim();
+
+            if (!openai_key && !gemini_key) {
+                if (settingsMessage) {
+                    settingsMessage.textContent = 'Please enter at least one API key to save.';
+                    settingsMessage.style.display = 'block';
+                    settingsMessage.style.backgroundColor = '#fee2e2';
+                    settingsMessage.style.color = '#dc2626';
+                }
+                return;
+            }
+
+            settingsSaveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            settingsSaveBtn.disabled = true;
+
+            try {
+                const resp = await fetch('/save-api-keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ openai_key, gemini_key })
+                });
+                const data = await resp.json();
+
+                if (data.status === 'success') {
+                    if (settingsMessage) {
+                        settingsMessage.textContent = 'API Keys saved successfully! You can now use AI features.';
+                        settingsMessage.style.display = 'block';
+                        settingsMessage.style.backgroundColor = '#dcfce7';
+                        settingsMessage.style.color = '#16a34a';
+                    }
+                    if (settingsOpenaiKey) settingsOpenaiKey.value = '';
+                    if (settingsGeminiKey) settingsGeminiKey.value = '';
+
+                    setTimeout(() => {
+                        if (settingsModalOverlay) settingsModalOverlay.style.display = 'none';
+                    }, 2000);
+                } else {
+                    throw new Error(data.message || 'Failed to save keys');
+                }
+            } catch (error) {
+                if (settingsMessage) {
+                    settingsMessage.textContent = error.message;
+                    settingsMessage.style.display = 'block';
+                    settingsMessage.style.backgroundColor = '#fee2e2';
+                    settingsMessage.style.color = '#dc2626';
+                }
+            } finally {
+                settingsSaveBtn.innerHTML = '<i class="fas fa-save"></i> Save Configuration';
+                settingsSaveBtn.disabled = false;
+            }
+        });
+    }
 
     // Fetch Articles
     const fetchArticles = async (domain = currentDomain) => {
+        if (currentViewMode !== 'updates') return;
+        
+        if (articlesGrid) articlesGrid.className = 'articles-grid';
         articlesGrid.innerHTML = '<div class="loader">Fetching latest insights...</div>';
         try {
             const query = searchInput.value;
@@ -523,10 +704,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             // Expected data: { total_count: int, articles: [...] } or array if legacy endpoint
-            if (data.total_count !== undefined && data.articles) {
-                renderArticles(data.articles, false, data.total_count);
-            } else {
-                renderArticles(data, false);
+            if (currentViewMode === 'updates') {
+                const articles = data.articles || data;
+                if (articles.length === 0 && domain === 'All' && !query) {
+                    articlesGrid.innerHTML = '<div class="loader">Starting initial discovery... This may take a moment.</div>';
+                    await fetch('/scrape');
+                    return fetchArticles(); // retry
+                }
+
+                if (data.total_count !== undefined && data.articles) {
+                    renderArticles(data.articles, false, data.total_count);
+                } else {
+                    renderArticles(data, false);
+                }
             }
         } catch (error) {
             console.error('Error fetching articles:', error);
@@ -537,7 +727,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchSavedArticles() {
         articlesGrid.innerHTML = '<div class="loader">Loading saved articles...</div>';
         try {
-            const response = await fetch('/saved');
+            const domainParam = currentViewMode === 'schemes' ? 'Government Schemes' : currentDomain;
+            const response = await fetch(`/saved?domain=${encodeURIComponent(domainParam)}`);
             const data = await response.json();
             renderArticles(data, true);
         } catch (error) {
@@ -615,7 +806,9 @@ document.addEventListener('DOMContentLoaded', () => {
             modalDeepSumBtn.style.opacity = '0.6';
 
             try {
-                const resp = await fetch(`/deep_summary?url=${encodeURIComponent(article.link)}`);
+                const descParam = article.description || article.desc || '';
+                const titleParam = article.title || '';
+                const resp = await fetch(`/deep_summary?url=${encodeURIComponent(article.link)}&title=${encodeURIComponent(titleParam)}&desc=${encodeURIComponent(descParam)}`);
                 const data = await resp.json();
 
                 if (data.status === 'success') {
@@ -643,6 +836,10 @@ document.addEventListener('DOMContentLoaded', () => {
             modalFindSimilarBtn.style.opacity = '0.6';
 
             try {
+                if (!article.id) {
+                    modalSimilarContent.innerHTML = `<p style="color: var(--primary-orange); font-size: 0.85rem; text-align: center;"><strong>Note:</strong> To find articles similar to a government scheme, please click the <strong>Bookmark (Save)</strong> button first!</p>`;
+                    return;
+                }
                 const resp = await fetch(`/similar-articles?id=${article.id}`);
                 const data = await resp.json();
 
@@ -681,7 +878,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // NEW: TTS Script Event Handler
         modalTtsBtn.onclick = async (e) => {
             if (e) {
                 e.preventDefault();
@@ -692,18 +888,11 @@ document.addEventListener('DOMContentLoaded', () => {
             modalTtsBtn.disabled = true;
             modalTtsBtn.style.opacity = '0.6';
 
-            // Pluck the best available summary text to base the video on
             let summaryText = "";
             if (modalDeepSumSection.style.display === 'block' && modalDeepSumContent.innerText && !modalDeepSumContent.innerText.includes('Hang tight')) {
                 summaryText = modalDeepSumContent.innerText.split('— Detailed Analysis')[0].trim();
-            } else if (article.summaryPoints) {
-                try {
-                    summaryText = JSON.parse(article.summaryPoints).join(" ");
-                } catch (err) { }
-            } else if (article.summary) {
-                summaryText = article.summary;
             } else {
-                summaryText = article.description || "";
+                summaryText = article.description || article.desc || article.title;
             }
 
             try {
@@ -715,46 +904,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await resp.json();
 
                 if (data.status === 'success') {
-                    let parsedScript = null;
-                    try {
-                        parsedScript = typeof data.script === 'string' ? JSON.parse(data.script) : data.script;
-                    } catch (err) {
-                        console.error("Failed to parse script video JSON", err);
-                        modalTtsContent.innerHTML = `<p style="color: #ef4444; font-size: 0.85rem;"><strong>Error:</strong> Backend returned invalid JSON script formatting.</p>`;
-                        return;
-                    }
+                    const parsedScript = typeof data.script === 'string' ? JSON.parse(data.script) : data.script;
 
                     if (parsedScript && parsedScript.voice_text) {
-                        // Display the generated script summary
                         modalTtsContent.innerHTML = `
                             <div style="background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                                 <h5 style="color: #8b5cf6; margin-top: 0; margin-bottom: 0.5rem; font-size: 0.9rem;"><i class="fas fa-file-audio"></i> AI Voice Script</h5>
                                 <p style="margin: 0; font-size: 0.95rem; color: #1f2937; font-weight: 500; line-height: 1.6;">${parsedScript.voice_text}</p>
                             </div>
                         `;
-
-                        // Save the raw text for TTS playback 
                         modalTtsContent.dataset.rawNarration = parsedScript.voice_text;
-
-                        modalTtsPlayBtn.style.display = 'block';
-                        modalTtsPlayBtn.disabled = false;
-                        modalTtsPlayBtn.dataset.hasOpenai = data.has_openai;
-
-                    } else if (parsedScript && Array.isArray(parsedScript)) {
-                        // Fallback just in case Gemini hallucinates the old array format
-                        let fullText = "";
-                        parsedScript.forEach(s => fullText += s.voice_text + ". ");
-                        modalTtsContent.dataset.rawNarration = fullText;
-                        modalTtsContent.innerText = fullText;
-
                         modalTtsPlayBtn.style.display = 'block';
                         modalTtsPlayBtn.disabled = false;
                         modalTtsPlayBtn.dataset.hasOpenai = data.has_openai;
                     } else {
-                        // Fallback if the AI returns raw text instead of JSON
-                        modalTtsContent.dataset.rawNarration = data.script;
-                        modalTtsContent.innerText = data.script;
-
+                        modalTtsContent.dataset.rawNarration = data.script || data.summary || "";
+                        modalTtsContent.innerText = data.script || data.summary || "";
                         modalTtsPlayBtn.style.display = 'block';
                         modalTtsPlayBtn.disabled = false;
                         modalTtsPlayBtn.dataset.hasOpenai = data.has_openai;
@@ -982,9 +1147,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (signalScore >= 80) signalColor = '#10b981'; // Green for high
             else if (signalScore >= 50) signalColor = '#f59e0b'; // Yellow/Orange for medium
 
+            // ONLY render the image if it is truly unique/sourced from the article website
+            const imageUrl = article.image_url;
+            const hasUniqueImage = !!imageUrl;
+
             const card = document.createElement('div');
             card.className = 'article-card';
             card.innerHTML = `
+                ${hasUniqueImage ? `
+                <div class="article-image">
+                    <div class="unique-image-badge"><i class="fas fa-camera"></i> Source Image</div>
+                    <img src="${imageUrl}" alt="${article.title}" onerror="this.style.display='none'">
+                </div>` : ''}
                 <div class="article-body">
                     <div class="article-intelligence" style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.8rem;">
                         <div class="sentiment-mood ${moodClass}" title="AI Mood: ${sentiment}">
@@ -1253,31 +1427,13 @@ document.addEventListener('DOMContentLoaded', () => {
         startPlaceholderAnimation();
         updateSavedCount();
 
-        const response = await fetch(`/search?q=&domain=All&user_id=${currentUserId}`);
-        const data = await response.json();
-        const mainArticles = data.articles || data;
-
-        const newsRes = await fetch('/search?q=&domain=News');
-        const newsData = await newsRes.json();
-        const newsArticlesList = newsData.articles || newsData;
-        if (newsArticlesList.length > 0) lastKnownNewsId = newsArticlesList[0].id;
-
-        const techRes = await fetch('/search?q=&domain=Technology');
-        const techData = await techRes.json();
-        const techArticlesList = techData.articles || techData;
-        if (techArticlesList.length > 0) lastKnownTechId = techArticlesList[0].id;
-
-        if (mainArticles.length === 0) {
-            articlesGrid.innerHTML = '<div class="loader">Scraping articles for you...</div>';
-            await fetch('/scrape');
-            fetchArticles();
+        // One Unified Entry Point:
+        if (currentViewMode === 'schemes') {
+            fetchGovernmentSchemes(); 
         } else {
-            if (data.total_count !== undefined) {
-                renderArticles(mainArticles, false, data.total_count);
-            } else {
-                renderArticles(mainArticles);
-            }
+            activateDomainUpdates(); 
         }
+        
         startBackgroundPolling();
     }
 
@@ -1292,4 +1448,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     initialLoad();
+
+    // Global helper for dashboard cards to open research modal
+    window.openArticleModalById = async (id) => {
+        try {
+            const resp = await fetch(`/search?id=${id}`);
+            const data = await resp.json();
+            if (data.articles && data.articles.length > 0) {
+                openArticleModal(data.articles[0]);
+            }
+        } catch (e) {
+            console.error('Error opening article modal:', e);
+        }
+    };
 });

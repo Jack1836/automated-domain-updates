@@ -3,7 +3,7 @@ import re
 from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import google.generativeai as genai
+from google import genai
 
 # Shared Global variables for the ML extraction
 stop_words = set([...])  # Abbreviated for template
@@ -62,10 +62,12 @@ def get_gemini_summary(text):
         return get_extractive_summary(text)
         
     try:
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        client = genai.Client(api_key=key)
         prompt = f"Summarize this article content concisely in a single professional paragraph suitable for a news brief:\n\n{text}"
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
         if response.text:
            return response.text
         return get_extractive_summary(text)

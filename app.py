@@ -20,7 +20,8 @@ from io import BytesIO
 from flask import send_file
 
 from openai import OpenAI
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -58,7 +59,7 @@ WORD_PATTERN_5 = re.compile(r'\b[a-zA-Z]{5,}\b')
 # Configure Gemini API if available
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    pass # client is instantiated on demand
 else:
     print("WARNING: GEMINI_API_KEY not found in environment. Semantic similarity will fail.")
 
@@ -110,7 +111,8 @@ def init_db():
             saved INTEGER DEFAULT 0,
             sentiment TEXT,
             keywords TEXT,
-            deleted INTEGER DEFAULT 0
+            deleted INTEGER DEFAULT 0,
+            image_url TEXT
         )
     ''')
     # Add indexes for faster querying
@@ -161,9 +163,41 @@ def get_keywords(text):
     keywords = sorted(freq, key=lambda k: freq[k], reverse=True)[:5]
     return ", ".join(keywords)
 
+def get_article_image(url):
+    """
+    Scrapes the target URL to find a representative image (og:image, twitter:image, or main img).
+    """
+    if not url or not url.startswith('http'):
+        return None
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Priority 1: Open Graph Image
+        og_img = soup.find('meta', property='og:image') or soup.find('meta', name='og:image')
+        if og_img and og_img.get('content'):
+            return og_img['content']
+            
+        # Priority 2: Twitter Image
+        tw_img = soup.find('meta', name='twitter:image')
+        if tw_img and tw_img.get('content'):
+            return tw_img['content']
+            
+        # Priority 3: Large standard image
+        imgs = soup.find_all('img')
+        for img in imgs:
+            src = img.get('src')
+            if src and src.startswith('http'):
+                # Basic heuristic: ignore small icons/trackers
+                if 'logo' not in src.lower() and 'icon' not in src.lower():
+                    return src
+    except Exception:
+        pass
+    return None
+
 def migrate():
     conn = get_db_connection()
-    # Check if columns exist (for robustness)
     cursor = conn.execute('PRAGMA table_info(articles)')
     columns = [row['name'] for row in cursor.fetchall()]
     
@@ -173,14 +207,28 @@ def migrate():
         conn.execute('ALTER TABLE articles ADD COLUMN keywords TEXT')
     if 'deleted' not in columns:
         conn.execute('ALTER TABLE articles ADD COLUMN deleted INTEGER DEFAULT 0')
+    if 'image_url' not in columns:
+        conn.execute('ALTER TABLE articles ADD COLUMN image_url TEXT')
     
     # Backfill articles with missing sentiment or keywords
-    articles = conn.execute('SELECT id, title, description FROM articles WHERE sentiment IS NULL OR keywords IS NULL').fetchall()
-    for article in articles:
+    articles = conn.execute('SELECT id, title, description, link, image_url FROM articles WHERE sentiment IS NULL OR keywords IS NULL OR image_url IS NULL LIMIT 200').fetchall()
+    
+    def backfill_single(article):
         combined_text = article['title'] + " " + (article['description'] or "")
         sentiment = get_simple_sentiment(combined_text)
         keywords = get_keywords(combined_text)
-        conn.execute('UPDATE articles SET sentiment = ?, keywords = ? WHERE id = ?', (sentiment, keywords, article['id']))
+        image_url = article['image_url']
+        
+        # Try to collect image from site if missing
+        if not image_url:
+            image_url = get_article_image(article['link'])
+            
+        return (sentiment, keywords, image_url, article['id'])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        updates = list(executor.map(backfill_single, articles))
+        for up in updates:
+            conn.execute('UPDATE articles SET sentiment = ?, keywords = ?, image_url = ? WHERE id = ?', up)
     
     conn.commit()
 
@@ -279,7 +327,17 @@ def scrape():
                         combined_text = title + " " + (desc or "")
                         sentiment = get_simple_sentiment(combined_text)
                         keywords = get_keywords(combined_text)
-                        results.append((title, desc or title, link, 'Google News', source['domain'], pub_date, sentiment, keywords))
+                        # Try to get an image URL
+                        image_url = None
+                        try:
+                            # GN RSS items sometimes have images in the description as <img src="...">
+                            desc_soup = BeautifulSoup(item.description.text, 'html.parser')
+                            img = desc_soup.find('img')
+                            if img: image_url = img.get('src')
+                        except:
+                            pass
+                        
+                        results.append((title, desc or title, link, 'Google News', source['domain'], pub_date, sentiment, keywords, image_url))
 
             else:
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -302,7 +360,8 @@ def scrape():
                                     
                             sentiment = get_simple_sentiment(title)
                             keywords = get_keywords(title)
-                            results.append((title, link, link, 'Hacker News', source['domain'], published_date, sentiment, keywords))
+                            image_url = get_article_image(link)
+                            results.append((title, link, link, 'Hacker News', source['domain'], published_date, sentiment, keywords, image_url))
                 
                 elif source['type'] == 'devto':
                     items = soup.select('.crayons-story')
@@ -321,7 +380,8 @@ def scrape():
                             combined_text = title + " " + description
                             sentiment = get_simple_sentiment(combined_text)
                             keywords = get_keywords(combined_text)
-                            results.append((title, description, link, 'Dev.to', source['domain'], published_date, sentiment, keywords))
+                            image_url = get_article_image(link)
+                            results.append((title, description, link, 'Dev.to', source['domain'], published_date, sentiment, keywords, image_url))
 
                 elif source['type'] == 'bbc':
                     items = soup.select('[data-testid="anchor-inner-wrapper"]') or soup.select('a[href*="/news/"]')
@@ -341,7 +401,8 @@ def scrape():
                             if len(title) > 10 and '/news/' in link:
                                 sentiment = get_simple_sentiment(title)
                                 keywords = get_keywords(title)
-                                results.append((title, link, link, 'BBC News', source['domain'], published_date, sentiment, keywords))
+                                image_url = get_article_image(link)
+                                results.append((title, link, link, 'BBC News', source['domain'], published_date, sentiment, keywords, image_url))
 
         except Exception as e:
             print(f"Error scraping {source['url']}: {e}")
@@ -354,7 +415,7 @@ def scrape():
             results = future.result()
             for r in results:
                 try:
-                    conn.execute('INSERT OR IGNORE INTO articles (title, description, link, source, domain, published_date, sentiment, keywords) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', r)
+                    conn.execute('INSERT OR IGNORE INTO articles (title, description, link, source, domain, published_date, sentiment, keywords, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', r)
                     count += 1
                 except sqlite3.ProgrammingError:
                     pass # Handled slightly differently for differing col layouts if any, but they match 8 cols here.
@@ -384,7 +445,7 @@ def search():
     total_count = conn.execute(count_sql, where_params).fetchone()[0]
 
     sql = f'''
-        SELECT a.id, a.title, a.description, a.link, a.source, a.domain, a.published_date, a.saved, a.sentiment, a.keywords,
+        SELECT a.id, a.title, a.description, a.link, a.source, a.domain, a.published_date, a.saved, a.sentiment, a.keywords, a.image_url,
                COALESCE(SUM(v.view_count), 0) as total_views,
                COALESCE(MAX(CASE WHEN v.user_id = ? THEN v.view_count ELSE 0 END), 0) as user_views
         FROM articles a
@@ -593,16 +654,59 @@ def unsave_article():
     conn.commit()
     return jsonify({"status": "success"})
 
+@app.route('/save-scheme', methods=['POST'])
+def save_scheme():
+    data = request.json
+    title = data.get('title')
+    sector = data.get('sector')
+    state = data.get('state')
+    desc = data.get('desc')
+    link = data.get('link')
+    
+    conn = get_db_connection()
+    existing = conn.execute('SELECT id FROM articles WHERE link = ?', (link,)).fetchone()
+    
+    if existing:
+        conn.execute('UPDATE articles SET saved = 1, deleted = 0 WHERE id = ?', (existing['id'],))
+        article_id = existing['id']
+    else:
+        from datetime import datetime
+        published_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor = conn.execute('''
+            INSERT INTO articles (title, description, link, source, domain, published_date, saved, sentiment, keywords)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (title, desc, link, 'Open Government Data', 'Government Schemes', published_date, 1, 'Neutral', sector))
+        article_id = cursor.lastrowid
+        
+    conn.commit()
+    return jsonify({"status": "success", "id": article_id})
+
 @app.route('/saved', methods=['GET'])
 def get_saved():
+    domain_filter = request.args.get('domain', 'All')
     conn = get_db_connection()
-    articles = conn.execute('SELECT * FROM articles WHERE saved = 1 AND deleted = 0 ORDER BY id DESC').fetchall()
+    
+    if domain_filter == 'Government Schemes':
+        articles = conn.execute("SELECT * FROM articles WHERE saved = 1 AND deleted = 0 AND domain = 'Government Schemes' ORDER BY id DESC").fetchall()
+    elif domain_filter == 'All':
+        articles = conn.execute("SELECT * FROM articles WHERE saved = 1 AND deleted = 0 AND domain != 'Government Schemes' ORDER BY id DESC").fetchall()
+    else:
+        articles = conn.execute("SELECT * FROM articles WHERE saved = 1 AND deleted = 0 AND domain = ? ORDER BY id DESC", (domain_filter,)).fetchall()
+        
     return jsonify([dict(article) for article in articles])
 
 @app.route('/saved-count', methods=['GET'])
 def get_saved_count():
+    domain_filter = request.args.get('domain', 'All')
     conn = get_db_connection()
-    count = conn.execute('SELECT COUNT(*) FROM articles WHERE saved = 1 AND deleted = 0').fetchone()[0]
+    
+    if domain_filter == 'Government Schemes':
+        count = conn.execute("SELECT COUNT(*) FROM articles WHERE saved = 1 AND deleted = 0 AND domain = 'Government Schemes'").fetchone()[0]
+    elif domain_filter == 'All':
+        count = conn.execute("SELECT COUNT(*) FROM articles WHERE saved = 1 AND deleted = 0 AND domain != 'Government Schemes'").fetchone()[0]
+    else:
+        count = conn.execute("SELECT COUNT(*) FROM articles WHERE saved = 1 AND deleted = 0 AND domain = ?", (domain_filter,)).fetchone()[0]
+        
     return jsonify({"count": count})
 
 @app.route('/delete', methods=['POST'])
@@ -731,145 +835,117 @@ def get_tags():
 def get_similar_articles():
     article_id = request.args.get('id', type=int)
     if not article_id:
-        return jsonify({"error": "Article ID applies"}), 400
+        return jsonify({"error": "Article ID required"}), 400
 
     try:
         conn = get_db_connection()
         
         # Fetch the selected article
-        target_article = conn.execute(
-            "SELECT id, title, description, url_domain as domain FROM (SELECT id, title, description, domain as url_domain FROM articles) WHERE id = ?", (article_id,)
+        target_row = conn.execute(
+            "SELECT id, title, description, domain FROM articles WHERE id = ?", (article_id,)
         ).fetchone()
         
-        if not target_article:
+        if not target_row:
             return jsonify({"error": "Article not found"}), 404
             
-        # Fetch candidate articles (excluding the selected one)
-        # Limit to 50 recent/relevant articles to keep the LLM context window manageable
+        target_article = dict(target_row)
+        
+        # Fetch candidate articles (excluding the selected one and deleted ones)
         candidates = conn.execute(
-            "SELECT id, title, description, domain FROM articles WHERE id != ? ORDER BY published_date DESC LIMIT 50", (article_id,)
+            "SELECT id, title, description, domain, source, link FROM articles WHERE id != ? AND deleted = 0 ORDER BY id DESC LIMIT 100", (article_id,)
         ).fetchall()
         
         if not candidates:
-            return jsonify({"similar_articles": []})
+            return jsonify({"status": "success", "similar_articles": []})
 
-        # Construct the Prompt
-        # We only pass title, description and domain to save tokens and speed up inference
-        target_text = f"Title: {target_article['title']}\nDescription: {target_article['description'] or 'N/A'}\nDomain: {target_article['domain']}"
-        
-        candidates_list = []
-        for c in candidates:
-            candidates_list.append({
-                "id": c['id'],
-                "title": c['title'],
-                "content": c['description'] or 'N/A',
-                "domain": c['domain']
-            })
-            
-        import json
-        
-        similarity_results = []
-        
-        # Branch 1: Gemini LLM (if API key exists)
+        # Gemini AI Branch
         if GEMINI_API_KEY:
-            prompt_template = f"""
-Analyze the NEW ARTICLE and compare it with PREVIOUS ARTICLES.
-Rank them based on semantic similarity.
-
-Similarity must consider:
-- Core subject/topic overlap
-- Named entities overlap
-- Technical terminology similarity
-- Intent (informative, announcement, analysis, etc.)
-- Domain context
-
-Instructions:
-- Score similarity from 0–100.
-- Exclude matches below 60%.
-- Rank from highest to lowest similarity.
-- Provide reasoning using overlapping concepts.
-- Return output in structured JSON format only, exactly matching this schema:
-[
-  {{
-    "id": 123,
-    "title": "Article Title",
-    "similarity_score": 85,
-    "reason": "Brief explanation of overlapping topics..."
-  }}
-]
+            try:
+                target_text = f"Title: {target_article['title']}\nDescription: {target_article['description'] or ''}\nDomain: {target_article['domain']}"
+                candidates_list = []
+                for c in candidates:
+                    candidates_list.append({
+                        "id": c['id'],
+                        "title": c['title'],
+                        "content": (c['description'] or '')[:300],
+                        "domain": c['domain']
+                    })
+                
+                prompt = f"""
+Analyze logic for similarity between the NEW ARTICLE and list of PREVIOUS ARTICLES:
+1. Score similarity 0-100 based on Topic, Intent, and Domain.
+2. Filter out matches below 65%.
+3. Return top 5 matches as a JSON array only.
 
 NEW ARTICLE:
-\"\"\"
 {target_text}
-\"\"\"
 
 PREVIOUS ARTICLES:
 {json.dumps(candidates_list, indent=2)}
 """
-
-            # Call Gemini
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            # Instruct model to return JSON
-            response = model.generate_content(
-                prompt_template,
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json",
+                client = genai.Client(api_key=GEMINI_API_KEY)
+                response = client.models.generate_content(
+                    model='gemini-1.5-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-            )
-            
-            # Parse the JSON response
-            try:
+                
                 similarity_results = json.loads(response.text)
-            except json.JSONDecodeError:
-                print(f"Failed to parse Gemini JSON: {response.text}")
-                return jsonify({"status": "error", "message": "Failed to parse AI response"}), 500
                 
-            # Limit to top 5
-            similarity_results = sorted(similarity_results, key=lambda x: x.get('similarity_score', 0), reverse=True)[:5]
-            
-        # Branch 2: Offline Mathematical Fallback (TF-IDF + Cosine Similarity)
-        else:
-            try:
-                from sklearn.feature_extraction.text import TfidfVectorizer
-                from sklearn.metrics.pairwise import cosine_similarity
-                
-                # Prepare documents for vectorization
-                documents = [target_text] + [f"Title: {c['title']}\nDescription: {c['content']}\nDomain: {c['domain']}" for c in candidates_list]
-                
-                # Vectorize mathematically
-                vectorizer = TfidfVectorizer(stop_words='english')
-                tfidf_matrix = vectorizer.fit_transform(documents)
-                
-                # Calculate similarities against the target (index 0)
-                cosine_sims = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
-                
-                # Match scores back to candidate IDs
-                for i, score in enumerate(cosine_sims):
-                    percentage_score = int(score * 100)
-                    if percentage_score >= 10: # Lower threshold for fallback math since overlap is strict
-                        similarity_results.append({
-                            "id": candidates_list[i]['id'],
-                            "title": candidates_list[i]['title'],
-                            "similarity_score": percentage_score,
-                            "reason": "Calculated instantly via Offline AI (TF-IDF Keyword & Topic overlap)."
+                # Fetch full data for these results
+                final_results = []
+                for res in similarity_results:
+                    # res might be id, or a more detailed object
+                    rid = res if isinstance(res, int) else res.get('id')
+                    original = next((c for c in candidates if c['id'] == rid), None)
+                    if original:
+                        final_results.append({
+                            "id": original['id'],
+                            "title": original['title'],
+                            "similarity_score": res.get('similarity_score', 80) if isinstance(res, dict) else 80,
+                            "reason": res.get('reason', 'High semantic overlap.') if isinstance(res, dict) else 'High semantic overlap.',
+                            "link": original['link'],
+                            "domain": original['domain'],
+                            "source": original['source']
                         })
-                
-                # Sort and limit to top 5
-                similarity_results = sorted(similarity_results, key=lambda x: x.get('similarity_score', 0), reverse=True)[:5]
+                return jsonify({"status": "success", "similar_articles": final_results})
             except Exception as e:
-                print(f"Offline AI Similarity Failed: {e}")
-                return jsonify({"status": "error", "message": "Offline Semantic AI engine failed to calculate relations."}), 500
-        
-        # Enhance results with article links from DB
-        conn = get_db_connection()
-        for res in similarity_results:
-            row = conn.execute("SELECT link, domain, source FROM articles WHERE id = ?", (res['id'],)).fetchone()
-            if row:
-                res['link'] = row['link']
-                res['domain'] = row['domain']
-                res['source'] = row['source']
+                print(f"Gemini Similarity Analysis Failed: {e}", flush=True)
 
-        return jsonify({"status": "success", "similar_articles": similarity_results})
+        # Robust Native Fallback Branch (Dependency-Free)
+        def get_keywords(text):
+            if not text: return set()
+            words = re.findall(r'\b\w{4,}\b', text.lower())
+            return set(w for w in words if w not in STOP_WORDS)
+
+        target_words = get_keywords(f"{target_article['title']} {target_article['description']}")
+        
+        matches = []
+        for c in candidates:
+            cand_words = get_keywords(f"{c['title']} {c['description']}")
+            intersection = target_words.intersection(cand_words)
+            union = target_words.union(cand_words)
+            
+            # Simple Jaccard Similarity Score
+            score = (len(intersection) / len(union) * 100) if union else 0
+            
+            # Bonus weight if domain matches
+            if c['domain'] == target_article['domain']:
+                score += 15
+            
+            if score >= 15: # Threshold for keyword overlap
+                matches.append({
+                    "id": c['id'],
+                    "title": c['title'],
+                    "link": c['link'],
+                    "domain": c['domain'],
+                    "source": c['source'],
+                    "similarity_score": min(int(score), 99),
+                    "reason": f"Shared keywords: {', '.join(list(intersection)[:3])}" if intersection else "Matching subject domain."
+                })
+        
+        matches = sorted(matches, key=lambda x: x['similarity_score'], reverse=True)[:5]
+        return jsonify({"status": "success", "similar_articles": matches})
 
     except Exception as e:
         print(f"Error finding similar articles: {e}")
@@ -920,10 +996,11 @@ ARTICLE TO ANALYZE:
 {target_text}
 \"\"\"
 """
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(
-                prompt_template,
-                generation_config=genai.types.GenerationConfig(
+            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            response = client.models.generate_content(
+                model='gemini-1.5-flash',
+                contents=prompt_template,
+                config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 )
             )
@@ -1044,7 +1121,6 @@ def save_api_keys():
     if gemini_key:
         env_vars['GEMINI_API_KEY'] = gemini_key
         os.environ['GEMINI_API_KEY'] = gemini_key
-        genai.configure(api_key=gemini_key)
         
     with open('.env', 'w') as f:
         for k, v in env_vars.items():
@@ -1092,88 +1168,90 @@ def track_usage():
 @app.route('/deep_summary', methods=['GET'])
 def deep_summary():
     url = request.args.get('url', '')
+    title_fallback = request.args.get('title', '')
+    desc_fallback = request.args.get('desc', '')
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
     try:
-        # 1. Fetch full article content
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Referer': 'https://www.google.com/'
         }
-        
-        # Handle News Redirects before Newspaper downloads
         actual_url = url
         if 'news.google.com' in url:
             try:
                 decoded = new_decoderv1(url)
                 if decoded.get('status') and decoded.get('decoded_url'):
                     actual_url = decoded['decoded_url']
-            except Exception as e:
-                print(f"DEBUG Summary: Google News Decode failed: {e}")
+            except:
+                pass
 
         # 1. Guaranteed Content Extraction using Newspaper3k with Fallback
         text = ""
+        article_obj = None
         try:
             article_obj = Article(actual_url)
-            article_obj.download()
+            article_obj.download(timeout=10)
             article_obj.parse()
             text = article_obj.text
-        except Exception as e:
-            print(f"DEBUG Summary: Newspaper3k download failed: {e}. Attempting manual fetch fallback.", flush=True)
+            import nltk
             try:
-                # Custom requests session to bypass bot-blockers (e.g. Forbes 403 Max Restarts)
+                nltk.data.find('tokenizers/punkt')
+            except LookupError:
+                nltk.download('punkt', quiet=True)
+            article_obj.nlp()
+        except:
+            try:
                 session = requests.Session()
-                resp = session.get(actual_url, headers=headers, timeout=15)
-                resp.raise_for_status()
-                
+                resp = session.get(actual_url, headers=headers, timeout=10)
                 article_obj = Article(actual_url)
                 article_obj.set_html(resp.content)
                 article_obj.parse()
                 text = article_obj.text
-            except Exception as e2:
-                print(f"DEBUG Summary: Manual fetch fallback also failed: {e2}", flush=True)
-        print(f"DEBUG Summary: Newspaper3k extracted text length: {len(text)}", flush=True)
+                import nltk
+                try:
+                    nltk.data.find('tokenizers/punkt')
+                except LookupError:
+                    nltk.download('punkt', quiet=True)
+                article_obj.nlp()
+            except:
+                pass
 
+        # If extraction failed, rely on highly accurate metadata passed from the UI!
         if len(text) < 200:
-             conn = get_db_connection()
-             article = conn.execute("SELECT title, description FROM articles WHERE link = ?", (url,)).fetchone()
-             conn.close()
-             
-             fallback = "Could not extract enough content for a deep summary."
-             if article and (article['title'] or article['description']):
-                 fallback = f"{article['title'] or ''}. {article['description'] or ''}"
+             if title_fallback or desc_fallback:
+                 text = f"{title_fallback}. {desc_fallback}".strip()
+             else:
+                 return jsonify({
+                     "summary_points": [],
+                     "summary": "Could not extract enough readable content to summarize. The website might be blocking automated access.",
+                     "status": "warning"
+                 })
 
-             return jsonify({
-                 "summary_points": [],
-                 "summary": fallback,
-                 "status": "warning"
-             })
-
-        # 2. LLM Abstractive Summarization Upgrade
+        # 2. LLM Abstractive Summarization Upgrade (Highly Factual)
         if GEMINI_API_KEY:
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                client = genai.Client(api_key=GEMINI_API_KEY)
                 prompt = f"""
-You are an expert technical editor. Analyze the following article text and generate a concise, highly readable summary.
+You are an expert technical AI summarizer. Please analyze the following text strictly and accurately.
 
-Instructions:
-1. Provide a cohesive 2-3 sentence paragraph summarizing the core narrative.
-2. Provide 3-5 succinct bullet points highlighting the most important facts, numbers, or technical takeaways.
-Return ONLY valid JSON in this exact format, with no markdown formatting around it:
+1. Provide a cohesive 2-3 sentence paragraph summarizing the core narrative. Be completely factual. Do not hallucinate details.
+2. Provide 3-5 succinct bullet points highlighting the most important facts.
+Output ONLY valid JSON:
 {{
-  "summary": "Your cohesive 2-3 sentence paragraph here.",
-  "summary_points": ["Point 1", "Point 2", "Point 3"]
+  "summary": "Summary here.",
+  "summary_points": ["Point 1", "Point 2"]
 }}
                 
-ARTICLE TEXT:
+TEXT TO SUMMARIZE:
 {text[:15000]}
 """
-                response = model.generate_content(prompt)
+                response = client.models.generate_content(
+                    model='gemini-1.5-flash',
+                    contents=prompt
+                )
                 result_text = response.text.strip()
                 if result_text.startswith("```json"):
                     result_text = result_text[7:-3].strip()
@@ -1192,126 +1270,181 @@ ARTICLE TEXT:
                     "mode": "ai"
                 })
             except Exception as e:
-                print(f"DEBUG Summary: Gemini LLM failed, falling back to extractive math. Error: {e}", flush=True)
+                print(f"DEBUG Summary: Gemini LLM analysis failed. Warning: {e}", flush=True)
 
-        # 3. Extractive Summarization Fallback logic
-        # Clean text
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Split into sentences
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-        
-        # Filter out boilerplate, licenses, and invalid lengths
-        boilerplate_phrases = [
-            'the software is provided "as is"',
-            'without warranty of any kind',
-            'fitness for a particular purpose',
-            'merchantability',
-            'shall the authors or copyright holders be liable',
-            'all rights reserved',
-            'privacy policy',
-            'terms of service'
-        ]
-        
-        valid_sentences = []
-        seen_sentences = set() # Strict exact-match deduplication
-        
-        for s in sentences:
-            s_clean = s.strip()
-            if not (15 < len(s_clean) < 800):
-                continue
-            s_lower = s_clean.lower()
-            if s_lower in seen_sentences:
-                continue
-                
-            if not any(bp in s_lower for bp in boilerplate_phrases):
-                valid_sentences.append(s_clean)
-                seen_sentences.add(s_lower)
-                
-        sentences = valid_sentences
-        print(f"DEBUG Summary: Total sentences after filtering: {len(sentences)}", flush=True)
-
-        if len(sentences) == 0:
-            # Fallback to Newspaper3k's built-in NLP summary
-            try:
-                article_obj.nlp()
-                fallback_summary = article_obj.summary
-                if fallback_summary:
-                    return jsonify({
-                        "summary_points": fallback_summary.split('\n'),
-                        "summary": fallback_summary,
-                        "word_count": len(fallback_summary.split()),
-                        "status": "success"
-                    })
-            except Exception as e:
-                print(f"DEBUG Summary: NLP Fallback failed: {e}")
-            return jsonify({
-                 "summary_points": [],
-                 "summary": "Extraction failed: Not enough parsable text.",
-                 "status": "error"
-            }), 500
-
-        # ML-Based Extractive Summarization (TextRank Approximation via TF-IDF matrix)
-        import numpy as np
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.metrics.pairwise import cosine_similarity
-        
-        try:
-            # 1. Vectorize valid sentences into a TF-IDF matrix
-            vectorizer = TfidfVectorizer(stop_words='english')
-            tfidf_matrix = vectorizer.fit_transform(sentences)
-            
-            # 2. Compute Cosine Similarity between all sentences
-            sim_matrix = cosine_similarity(tfidf_matrix, tfidf_matrix)
-            
-            # 3. Calculate "Centrality" (importance) of each sentence
-            scores = np.sum(sim_matrix, axis=1)
-            
-            # 4. Extract Top Sentences
-            num_sentences = min(5, len(sentences))
-            ranked_indices = np.argsort(scores)[::-1] # indices of top scores
-            top_indices = ranked_indices[:num_sentences]
-            
-            # 5. Restore Chronological Order
-            top_indices_sorted = sorted(top_indices)
-            top_sentences = [sentences[i] for i in top_indices_sorted]
-            
-            # Compile final paragraph
-            summary = " ".join(top_sentences)
-            
-            # Generate summary points (take the top 3 highest scoring sentences)
-            summary_points_indices = ranked_indices[:min(3, len(sentences))]
-            summary_points = [sentences[i] for i in summary_points_indices]
-
-            return jsonify({
-                "summary_points": summary_points,
-                "summary": summary,
-                "word_count": len(summary.split()),
-                "status": "success",
-                "mode": "ml_extractive"
-            })
-            
-        except Exception as ml_err:
-             print(f"DEBUG Summary: ML Summarizer failed: {ml_err}", flush=True)
-             fallback_summary = " ".join(sentences[:min(5, len(sentences))])
+        # 3. Robust Native NLP Summarization Fallback (No Scikit-Learn dependencies to prevent 500 crashes)
+        fallback_summary = article_obj.summary if article_obj and article_obj.summary else ""
+        if fallback_summary and len(fallback_summary) > 50:
              return jsonify({
-                 "summary_points": [],
-                 "summary": fallback_summary,
+                 "summary_points": fallback_summary.split('\n'),
+                 "summary": fallback_summary.replace('\n', ' '),
                  "word_count": len(fallback_summary.split()),
-                 "status": "warning",
-                 "mode": "fallback_extractive"
+                 "status": "success",
+                 "mode": "extractive-nlp"
              })
+             
+        # 4. Ultimate Manual Extractive Fallback
+        text = re.sub(r'\s+', ' ', text)
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        valid_sentences = [s for s in sentences if 15 < len(s) < 800 and not any(bp in s.lower() for bp in ['terms of service', 'privacy policy'])]
+        
+        fallback_summary = " ".join(valid_sentences[:min(6, len(valid_sentences))])
+        
+        return jsonify({
+            "summary_points": [],
+            "summary": fallback_summary,
+            "word_count": len(fallback_summary.split()),
+            "status": "success",
+            "mode": "extractive-manual"
+        })
 
     except Exception as e:
         print(f"Deep Summary Error: {str(e)}")
         return jsonify({
             "summary_points": [],
-            "summary": f"Extraction failed: {str(e)}. The website might be blocking automated access or the link is invalid.",
+            "summary": f"Extraction framework failed: {str(e)}. The website might be completely blocking automated access.",
             "status": "error"
         }), 500
 
+@app.route('/api/v1/schemes', methods=['GET'])
+def fetch_gov_schemes():
+    # Large categorized list of real-world Indian government schemes
+    all_schemes = [
+        # HEALTH SCHEMES
+        {
+            "title": "Ayushman Bharat (PM-JAY)",
+            "sector": "Health",
+            "state": "Pan-India",
+            "desc": "Universal health coverage for bottom 40% of India's population. ₹5 lakh per family per year for secondary and tertiary care.",
+            "link": "https://pmjay.gov.in/",
+            "image_url": "https://upload.wikimedia.org/wikipedia/en/thumb/5/51/Ayushman_Bharat_logo.svg/1200px-Ayushman_Bharat_logo.svg.png"
+        },
+        {
+            "title": "Mission Indradhanush",
+            "sector": "Health",
+            "state": "Pan-India",
+            "desc": "Universal immunization program aiming at full immunization coverage with 12 vaccines for children and pregnant women.",
+            "link": "https://pib.gov.in/PressReleseDetail.aspx?PRID=1815152",
+            "image_url": "https://nhm.gov.in/images/pdf/Indradhanush/banner_Indradhanush.jpg"
+        },
+        {
+            "title": "Janani Suraksha Yojana (JSY)",
+            "sector": "Health",
+            "state": "Pan-India",
+            "desc": "Safe motherhood intervention scheme to reduce maternal and neonatal mortality by promoting institutional delivery among poor pregnant women.",
+            "link": "https://nhm.gov.in/index1.php?lang=1&level=3&sublinkid=841&lid=309",
+            "image_url": "https://nhm.gov.in/images/pdf/JSY/jsy_logo.png"
+        },
+        
+        # STUDENT & EDUCATION SCHEMES
+        {
+            "title": "PM Vidya Lakshmi Scheme",
+            "sector": "Students & Education",
+            "state": "Pan-India",
+            "desc": "First of its kind portal for students seeking education loans. Provides a single window for students to access information and make multiple applications for educational loans.",
+            "link": "https://www.vidyalakshmi.co.in/",
+            "image_url": "https://www.vidyalakshmi.co.in/Students/images/logo.png"
+        },
+        {
+            "title": "Samagra Shiksha Abhiyan",
+            "sector": "Students & Education",
+            "state": "Pan-India",
+            "desc": "Integrated Scheme for School Education from Pre-school to Senior Secondary levels with the aim of ensuring inclusive and equitable quality education.",
+            "link": "https://samagra.education.gov.in/",
+            "image_url": "https://samagra.education.gov.in/images/logo.png"
+        },
+        {
+            "title": "Pradhan Mantri Innovative Learning Programme (DHRUV)",
+            "sector": "Students & Education",
+            "state": "Pan-India",
+            "desc": "A scheme targeted at talented students to enrich their knowledge and skills in centers of excellence.",
+            "link": "https://pib.gov.in/PressReleseDetail.aspx?PRID=1587637",
+            "image_url": "https://pib.gov.in/images/PIB_Logo.png"
+        },
+        
+        # AGRICULTURE & FARMER SCHEMES
+        {
+            "title": "PM Kisan Samman Nidhi",
+            "sector": "Agriculture & Farmers",
+            "state": "Pan-India",
+            "desc": "Direct income support of ₹6000/- per year to all farmer families across the country.",
+            "link": "https://pmkisan.gov.in/",
+            "image_url": "https://pmkisan.gov.in/Images/logo.png"
+        },
+        {
+            "title": "PM Fasal Bima Yojana (PMFBY)",
+            "sector": "Agriculture & Farmers",
+            "state": "Pan-India",
+            "desc": "Government-sponsored crop insurance scheme that integrates multiple stakeholders and provides low-cost premium insurance for farmers.",
+            "link": "https://pmfby.gov.in/",
+            "image_url": "https://pmfby.gov.in/assets/images/logo.png"
+        },
+        {
+            "title": "Soil Health Card Scheme",
+            "sector": "Agriculture & Farmers",
+            "state": "Pan-India",
+            "desc": "Assists State Governments to issue soil health cards to all farmers to help them understand soil health and use fertilizers accordingly.",
+            "link": "https://soilhealth.dac.gov.in/",
+            "image_url": "https://soilhealth.dac.gov.in/Content/images/logo.png"
+        },
+
+        # FINANCE & BUSINESS SCHEMES
+        {
+            "title": "Pradhan Mantri Mudra Yojana (PMMY)",
+            "sector": "Finance & Business",
+            "state": "Pan-India",
+            "desc": "Loans up to ₹10 lakh to non-corporate, non-farm small/micro enterprises. Divided into Shishu, Kishor, and Tarun loans.",
+            "link": "https://www.mudra.org.in/",
+            "image_url": "https://www.mudra.org.in/Content/images/logo.png"
+        },
+        {
+            "title": "Stand-Up India Scheme",
+            "sector": "Finance & Business",
+            "state": "Pan-India",
+            "desc": "Bank loans between ₹10 lakh and ₹1 Crore to at least one SC/ST and at least one woman per branch for setting up a greenfield enterprise.",
+            "link": "https://www.standupmitra.in/",
+            "image_url": "https://www.standupmitra.in/assets/images/logo.png"
+        },
+        {
+            "title": "PMEGP (Prime Minister's Employment Generation Programme)",
+            "sector": "Finance & Business",
+            "state": "Pan-India",
+            "desc": "Credit-linked subsidy program aimed at generating self-employment opportunities through establishment of micro-enterprises in non-farm sector.",
+            "link": "https://www.kviconline.gov.in/pmegpeportal/pmegphome/index.jsp",
+            "image_url": "https://www.kviconline.gov.in/pmegpeportal/images/logo.png"
+        },
+        
+        # DIGITAL & TECH SCHEMES
+        {
+            "title": "Digital India Bhashini",
+            "sector": "Digital & Tech",
+            "state": "Pan-India",
+            "desc": "AI-led language translation platform to provide internet and digital services in Indian languages, including voice-based access.",
+            "link": "https://bhashini.gov.in/",
+            "image_url": "https://bhashini.gov.in/static/media/bhashini-logo.1d8d3e9c.png"
+        },
+        {
+            "title": "PM-WANI (Wi-Fi Access Network Interface)",
+            "sector": "Digital & Tech",
+            "state": "Pan-India",
+            "desc": "Aims to elevate wireless internet connectivity to boost the digital economy through Public Data Offices (PDOs).",
+            "link": "https://dot.gov.in/pm-wani",
+            "image_url": "https://dot.gov.in/sites/all/themes/dot/logo.png"
+        }
+    ]
+    
+    # Handle Sector Filtering for more specific requests
+    requested_sector = request.args.get('sector')
+    if requested_sector:
+        schemes = [s for s in all_schemes if s['sector'].lower() == requested_sector.lower()]
+    else:
+        schemes = all_schemes
+
+    return jsonify({"status": "success", "schemes": schemes})
 
 if __name__ == '__main__':
+    with app.app_context():
+        init_db()
     app.run(host='0.0.0.0', debug=True, port=5003)
 else:
     # Ensure DB is initialized when running with a WSGI server

@@ -5,7 +5,7 @@ lxml
 textblob
 flask_cors
 openai
-google-generativeai
+google-genai
 python-dotenv
 newspaper3k
 googlenewsdecoder

@@ -51,23 +51,48 @@
                 <h3>Menu</h3>
                 <button id="close-sidebar" class="icon-btn"><i class="fas fa-times"></i></button>
             </div>
-            <div class="sidebar-section">
-                <h4>Selected Domains</h4>
-                <div class="domain-search">
-                    <div class="search-wrapper">
-                        <input type="text" id="domain-search-input" placeholder="Search categories...">
+            <div id="sidebar-domain-content">
+                <div class="sidebar-section">
+                    <h4>Selected Domains</h4>
+                    <div class="domain-search">
+                        <div class="search-wrapper">
+                            <input type="text" id="domain-search-input" placeholder="Search categories...">
+                        </div>
+                        <i class="fas fa-search"></i>
+                        <div id="domain-suggestions" class="suggestions-dropdown" style="display: none;"></div>
                     </div>
-                    <i class="fas fa-search"></i>
-                    <div id="domain-suggestions" class="suggestions-dropdown" style="display: none;"></div>
+                    <ul class="domain-list" id="domain-list">
+                        <li class="domain-item active" data-domain="All">All</li>
+                    </ul>
                 </div>
-                <ul class="domain-list" id="domain-list">
-                    <li class="domain-item active" data-domain="All">All</li>
-                </ul>
+                <div class="sidebar-section">
+                    <h4>Trending Topics</h4>
+                    <div id="trending-topics-cloud" class="trending-cloud">
+                        <div class="loader-small">Analyzing trends...</div>
+                    </div>
+                </div>
             </div>
-            <div class="sidebar-section">
-                <h4>Trending Topics</h4>
-                <div id="trending-topics-cloud" class="trending-cloud">
-                    <div class="loader-small">Analyzing trends...</div>
+
+            <div id="sidebar-scheme-content" style="display: none;">
+                <div class="sidebar-section">
+                    <h4>Scheme Sectors</h4>
+                    <ul class="domain-list" id="scheme-sector-list">
+                        <li class="domain-item active" data-sector="All">All Sectors</li>
+                        <li class="domain-item" data-sector="Health"><i class="fas fa-heartbeat" style="margin-right:0.5rem; font-size:0.8rem; color:#ef4444;"></i> Health</li>
+                        <li class="domain-item" data-sector="Students & Education"><i class="fas fa-graduation-cap" style="margin-right:0.5rem; font-size:0.8rem; color:var(--primary-blue);"></i> Students & Education</li>
+                        <li class="domain-item" data-sector="Agriculture & Farmers"><i class="fas fa-seedling" style="margin-right:0.5rem; font-size:0.8rem; color:var(--primary-orange);"></i> Agriculture & Farmers</li>
+                        <li class="domain-item" data-sector="Finance & Business"><i class="fas fa-briefcase" style="margin-right:0.5rem; font-size:0.8rem; color:#8b5cf6;"></i> Finance & Business</li>
+                        <li class="domain-item" data-sector="Digital & Tech"><i class="fas fa-laptop-code" style="margin-right:0.5rem; font-size:0.8rem; color:#10b981;"></i> Digital & Tech</li>
+                    </ul>
+                </div>
+                <div class="sidebar-section">
+                    <h4>Eligibility Status</h4>
+                    <div style="padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.9rem; color: var(--text-main);">
+                        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;"><input type="checkbox" checked> All Citizens</label>
+                        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;"><input type="checkbox"> Below Poverty Line</label>
+                        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;"><input type="checkbox"> Senior Citizens</label>
+                        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;"><input type="checkbox"> Women</label>
+                    </div>
                 </div>
             </div>
             <div class="sidebar-section">
@@ -82,18 +107,22 @@
                         <span>Saved Articles</span>
                         <span id="saved-count-badge" class="badge">0</span>
                     </li>
-                    <li id="sidebar-settings-btn"
-                        style="margin-top: 0.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
-                        <i class="fas fa-cog"></i>
-                        <span>Settings (API Keys)</span>
-                    </li>
                 </ul>
             </div>
 
         </aside>
 
         <main class="content">
-            <div class="search-section">
+            <div class="module-tabs">
+                <button id="tab-domain-updates" class="module-tab active-tab">
+                    <i class="fas fa-robot"></i> Automated Domain Updates
+                </button>
+                <button id="tab-gov-schemes" class="module-tab inactive-tab">
+                    <i class="fas fa-university"></i> Government Schemes
+                </button>
+            </div>
+
+            <div class="search-section" id="main-search-section">
                 <div class="search-bar">
                     <div class="search-wrapper">
                         <input type="text" id="search-input" placeholder="Search articles by keyword...">
